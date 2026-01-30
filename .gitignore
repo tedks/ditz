@@ -5,3 +5,5 @@ html
 # OCaml build artifacts
 _build/
 _opam/
+*.install
+*.opam
