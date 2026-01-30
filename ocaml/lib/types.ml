@@ -76,6 +76,8 @@ type config = {
 
 (* Helpers *)
 
+let () = Random.self_init ()
+
 let make_id ~title ~desc ~reporter =
   let now = Ptime_clock.now () |> Ptime.to_rfc3339 in
   let data = String.concat "\n" [now; string_of_float (Random.float 1.0); reporter; title; desc] in
