@@ -79,3 +79,27 @@ let init_project ~name ~issue_dir =
     } in
     save_project issue_dir project
   end
+
+let issue_path dir id =
+  Filename.concat dir (Printf.sprintf "issue-%s.yaml" id)
+
+let delete_issue dir id =
+  let path = issue_path dir id in
+  if Sys.file_exists path then begin
+    Sys.remove path;
+    Ok ()
+  end else
+    Error (`Msg (Printf.sprintf "Issue %s not found" id))
+
+let find_issue_by_id dir id_prefix =
+  let issues = load_issues dir in
+  let matches = List.filter (fun (issue : issue) ->
+    String.length issue.id >= String.length id_prefix &&
+    String.sub issue.id 0 (String.length id_prefix) = id_prefix
+  ) issues in
+  match matches with
+  | [] -> Error (`Msg (Printf.sprintf "No issue found matching '%s'" id_prefix))
+  | [issue] -> Ok issue
+  | _ ->
+    let ids = List.map (fun (i : issue) -> i.id) matches in
+    Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids)))

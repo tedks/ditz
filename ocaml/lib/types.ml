@@ -17,6 +17,13 @@ type log_event = {
 }
 [@@deriving yaml]
 
+type file_ref = {
+  path: string;
+  line: int option;
+  note: string option;
+}
+[@@deriving yaml]
+
 type issue = {
   id: string;
   title: string;
@@ -30,6 +37,9 @@ type issue = {
   creation_time: string;
   references: string list;
   log_events: log_event list;
+  blocks: string list;
+  blocked_by: string list;
+  file_refs: file_ref list;
 }
 [@@deriving yaml]
 
@@ -87,3 +97,8 @@ let status_widget = function
   | In_progress -> ">"
   | Paused -> "="
   | Closed -> "x"
+
+let disposition_to_string = function
+  | Fixed -> "fixed"
+  | Wontfix -> "wontfix"
+  | Reorg -> "reorg"
