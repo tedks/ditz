@@ -25,14 +25,12 @@ let read_yaml_file of_yaml path =
   | Error (`Msg e) -> Error (`Msg (Printf.sprintf "YAML parse error in %s: %s" path e))
 
 let write_yaml_file to_yaml path value =
-  match to_yaml value with
-  | Ok yaml ->
-    let content = Yaml.to_string_exn yaml in
-    let oc = open_out path in
-    output_string oc content;
-    close_out oc;
-    Ok ()
-  | Error e -> Error e
+  let yaml = to_yaml value in
+  let content = Yaml.to_string_exn yaml in
+  let oc = open_out path in
+  output_string oc content;
+  close_out oc;
+  Ok ()
 
 let load_project dir =
   read_yaml_file project_of_yaml (project_file dir)
