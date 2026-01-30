@@ -90,6 +90,132 @@ The Ruby version had a plugin system. Consider:
 - [ ] Markdown export
 - [ ] JSON output for scripting
 
+## Phase 5: AI Agent Experience
+
+This is the actual killer feature. What would make an AI agent *love* using this?
+
+### My Frustrations with Beads
+
+1. **Dual persistence complexity** - SQLite + JSONL means sync bugs, merge driver pain, worktree redirect files. When it breaks, it's confusing.
+2. **Opaque state** - I can't just `cat` an issue. I have to query.
+3. **Verbose output** - Sometimes I just want the ID back, not a paragraph.
+4. **No batch operations** - Closing 5 issues = 5 commands.
+5. **Daemon brittleness** - "Is the daemon running? On which worktree? What port?"
+
+### What I Actually Want
+
+#### 1. One File = One Issue (already have this!)
+The `.ditz/issue-{id}.yaml` pattern is perfect. I can:
+- `cat` it directly
+- `grep` across all issues
+- Parse it myself if the CLI is weird
+- Edit it with any tool
+
+#### 2. `--json` Flag on Everything
+Every command should support `--json` for structured output I can parse:
+```bash
+ditz add "Fix the thing" --json
+# {"id": "abc123", "title": "Fix the thing", "status": "unstarted"}
+
+ditz list --json
+# [{"id": "abc123", ...}, {"id": "def456", ...}]
+```
+
+#### 3. Context Dump
+A single command that gives me everything I need to understand the project:
+```bash
+ditz context
+# Dumps: project info, all open issues, recent activity
+# In a format optimized for putting in an LLM context window
+```
+
+Maybe even `ditz context --issue abc123` that includes related issues, blockers, etc.
+
+#### 4. Dependency Tracking
+Simple `blocks` / `blocked-by` relationships:
+```bash
+ditz blocks abc123 def456    # abc123 blocks def456
+ditz unblocks abc123 def456
+ditz show abc123             # Shows: "Blocks: def456, ghi789"
+```
+
+I discover dependencies constantly while working. Being able to record them is huge.
+
+#### 5. File References
+Link issues to specific files/locations:
+```bash
+ditz ref abc123 src/auth.ml:42
+ditz show abc123
+# References:
+#   - src/auth.ml:42
+```
+
+When I'm fixing an issue, I know *exactly* where the problem is. Record that.
+
+#### 6. Batch Operations
+```bash
+ditz close abc123 def456 ghi789 --fixed
+ditz start $(ditz list --unstarted --ids-only | head -3)
+```
+
+#### 7. Idempotent Creates
+```bash
+ditz add "Fix the thing" --id fix-auth-bug
+ditz add "Fix the thing" --id fix-auth-bug  # No-op or update, not error
+```
+
+Deterministic IDs mean I can retry without creating duplicates.
+
+#### 8. Stdin for Descriptions
+```bash
+echo "Detailed description here" | ditz add "Title" --desc-stdin
+cat error.log | ditz comment abc123 --stdin
+```
+
+I'm generating content. Let me pipe it.
+
+#### 9. Template Support
+```bash
+ditz add --template bug "Login fails on Firefox"
+# Pre-fills: type=bugfix, prompts for component, etc.
+```
+
+#### 10. The `ready` Command
+```bash
+ditz ready
+# Lists issues that are:
+#   - Unstarted or paused
+#   - Not blocked by anything
+#   - Assigned to current release (or unassigned)
+# i.e., "What can I work on right now?"
+```
+
+This is what I actually need when starting work.
+
+### Output Modes
+
+Three modes for every command:
+1. **Human** (default) - Pretty, colored, readable
+2. **JSON** (`--json`) - Structured, parseable
+3. **Quiet** (`-q`) - Just IDs or exit codes
+
+```bash
+ditz add "Fix thing"           # "Created issue abc123: Fix thing"
+ditz add "Fix thing" --json    # {"id":"abc123","title":"Fix thing",...}
+ditz add "Fix thing" -q        # abc123
+```
+
+### Non-Interactive by Default
+
+Unlike Ruby ditz which prompts for everything, default to non-interactive:
+```bash
+ditz add "Fix thing"                    # Creates with defaults
+ditz add "Fix thing" --interactive      # Prompts for type, component, etc.
+ditz add "Fix thing" --type bug --component auth  # Explicit
+```
+
+I'm an AI. I know what I want. Don't make me answer questions.
+
 ## Non-Goals
 
 Things we're explicitly NOT doing:
@@ -137,7 +263,25 @@ Target: single static binary that can be dropped anywhere.
 
 ## Open Questions
 
-1. **Issue ID format**: Keep SHA1 hashes or switch to shorter IDs (nanoid)?
+1. **Issue ID format**: Keep SHA1 hashes or switch to shorter IDs?
+   - Leaning: Support both. Generate short IDs by default (8 chars), accept full SHA1.
+   - Allow `--id custom-name` for deterministic/human IDs.
+
 2. **Config location**: `~/.ditz-config` or `~/.config/ditz/config.yaml`?
+   - Leaning: `~/.config/ditz/config.yaml` (XDG compliant)
+   - But support legacy `~/.ditz-config` for backward compat.
+
 3. **Backward compat**: How much effort to spend on reading Ruby ditz repos?
-4. **Name**: Keep "ditz" or rename? (ditz-ng, oditz, etc.)
+   - Leaning: Best-effort. Parse the YAML, ignore the Ruby tags.
+   - Don't crash on unknown fields.
+
+4. **Name**: Keep "ditz" or rename?
+   - Leaning: Keep "ditz". It's short, memorable, and pays respect to the original.
+
+5. **Dependency storage**: Inline in issue YAML or separate index?
+   - Leaning: Inline. `blocks: [id1, id2]` and `blocked_by: [id3]` fields.
+   - Denormalized but simple. Validate on load.
+
+6. **File references**: Just paths or structured?
+   - Leaning: Structured. `{path: "src/foo.ml", line: 42, note: "the bug is here"}`
+   - But accept simple "path:line" syntax on CLI.
