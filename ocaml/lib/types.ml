@@ -37,9 +37,9 @@ type issue = {
   creation_time: string;
   references: string list;
   log_events: log_event list;
-  blocks: string list;
-  blocked_by: string list;
-  file_refs: file_ref list;
+  blocks: string list; [@default []]
+  blocked_by: string list; [@default []]
+  file_refs: file_ref list; [@default []]
 }
 [@@deriving yaml]
 
