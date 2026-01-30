@@ -1,3 +1,7 @@
 *.swp
 .ditz-config
 html
+
+# OCaml build artifacts
+_build/
+_opam/
