@@ -1,0 +1,15 @@
+(test
+ (name lifecycle_test)
+ (libraries ditz))
+
+(test
+ (name id_prefix_test)
+ (libraries ditz unix))
+
+(test
+ (name validate_id_test)
+ (libraries ditz unix))
+
+(test
+ (name yaml_compat_test)
+ (libraries ditz yaml))

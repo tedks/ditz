@@ -19,20 +19,7 @@ let or_die = function
     exit 1
 
 (* Helper to get current timestamp *)
-let now_rfc3339 () =
-  match Ptime.of_float_s (Unix.gettimeofday ()) with
-  | Some t -> Ptime.to_rfc3339 t
-  | None -> "1970-01-01T00:00:00Z"
-
-(* Helper to add a log event to an issue *)
-let add_log_event (issue : Ditz.Types.issue) ~who ~what ~comment : Ditz.Types.issue =
-  let event : Ditz.Types.log_event = {
-    time = now_rfc3339 ();
-    who;
-    what;
-    comment;
-  } in
-  { issue with log_events = issue.log_events @ [event] }
+let now_rfc3339 () = Ditz.Issue_ops.now_rfc3339 ()
 
 (* Commands *)
 
@@ -168,11 +155,7 @@ let close_cmd =
         exit 1
     in
     let disp_str = Ditz.Types.disposition_to_string disposition in
-    let issue = { issue with
-      status = Ditz.Types.Closed;
-      disposition = Some disposition;
-    } in
-    let issue = add_log_event issue ~who:config.name ~what:("closed: " ^ disp_str) ~comment:"" in
+    let issue = Ditz.Issue_ops.close_issue issue ~who:config.name ~disposition in
     or_die (Ditz.Storage.save_issue config.issue_dir issue);
     Fmt.pr "Closed issue %s (%s)@." issue.id disp_str
   in
@@ -189,8 +172,7 @@ let start_cmd =
       Fmt.epr "Error: issue %s is closed@." issue.id;
       exit 1
     end;
-    let issue = { issue with status = Ditz.Types.In_progress } in
-    let issue = add_log_event issue ~who:config.name ~what:"started" ~comment:"" in
+    let issue = or_die (Ditz.Issue_ops.start_issue issue ~who:config.name) in
     or_die (Ditz.Storage.save_issue config.issue_dir issue);
     Fmt.pr "Started issue %s@." issue.id
   in
@@ -207,8 +189,7 @@ let stop_cmd =
       Fmt.epr "Error: issue %s is closed@." issue.id;
       exit 1
     end;
-    let issue = { issue with status = Ditz.Types.Paused } in
-    let issue = add_log_event issue ~who:config.name ~what:"stopped" ~comment:"" in
+    let issue = or_die (Ditz.Issue_ops.stop_issue issue ~who:config.name) in
     or_die (Ditz.Storage.save_issue config.issue_dir issue);
     Fmt.pr "Stopped issue %s@." issue.id
   in
