@@ -1,0 +1,7 @@
+name: ditz
+version: 0.1.0
+components:
+  - name: core
+  - name: cli
+  - name: git-integration
+releases: []
