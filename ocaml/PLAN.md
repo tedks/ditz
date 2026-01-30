@@ -216,12 +216,145 @@ ditz add "Fix thing" --type bug --component auth  # Explicit
 
 I'm an AI. I know what I want. Don't make me answer questions.
 
+## Phase 6: Git Integration & Worktrees
+
+### The ditz-metadata Branch
+
+Issue data lives in a separate orphan branch, not in your feature branches. This is the beads-metadata pattern, but simpler.
+
+**Why:**
+- No merge conflicts between code and issues
+- Issues don't pollute your PR diffs
+- One canonical location for issue state
+- Works naturally with worktrees
+
+**How it works:**
+```
+main              feature-branch        ditz-metadata
+  │                    │                     │
+  │                    │                 .ditz/
+  │                    │                 ├── project.yaml
+  │                    │                 ├── issue-abc.yaml
+  │                    │                 └── issue-def.yaml
+```
+
+Every ditz command:
+1. Checks out ditz-metadata to a temp location (or uses sparse checkout)
+2. Reads/writes issue files
+3. Commits changes
+4. Optionally pushes
+
+### Worktree Support (First-Class)
+
+Multiple worktrees, one issue database. No redirect files, no confusion.
+
+```bash
+# Main checkout
+~/projects/myapp/           # main branch
+~/projects/myapp-feature/   # feature branch (worktree)
+~/projects/myapp-hotfix/    # hotfix branch (worktree)
+
+# All three share the same ditz-metadata branch
+ditz list  # Same output in any worktree
+```
+
+**Implementation:**
+- `ditz init` creates the ditz-metadata branch
+- All ditz commands find the git root and operate on ditz-metadata
+- No .ditz directory in working tree at all (it's in the branch)
+
+### The Sync Command
+
+```bash
+ditz sync
+# 1. Fetches origin/ditz-metadata
+# 2. Merges (trivial because of file-per-issue)
+# 3. Pushes ditz-metadata
+```
+
+This is the only command that touches the network. Everything else is local.
+
+### Making Conflicts Trivial
+
+**One file per issue** - already have this. Conflicts only happen if two people edit the same issue simultaneously.
+
+**Append-only log events** - The `log_events` field is append-only. If two people add comments, both comments should appear. Conflict resolution: concatenate and sort by timestamp.
+
+**Last-write-wins for status** - If two people change status, the later timestamp wins. Simple.
+
+**Deterministic field order** - YAML fields always written in the same order. Reduces spurious diffs.
+
+**No derived state** - Don't store computed values (like issue counts). Derive them at read time.
+
+### Conflict Resolution Strategy
+
+When `ditz sync` hits a conflict:
+
+```bash
+ditz sync
+# CONFLICT in issue-abc123.yaml
+# Auto-resolving...
+#   - Merged log_events (2 + 1 = 3 entries)
+#   - Status conflict: took later timestamp (in_progress)
+#   - References: union of both sides
+# Resolved. Continuing sync.
+```
+
+Most conflicts auto-resolve. For the rare case they don't:
+```bash
+ditz sync
+# CONFLICT in issue-abc123.yaml
+# Could not auto-resolve: both sides changed title
+# Left in .ditz-conflict/issue-abc123.yaml.{LOCAL,REMOTE}
+# Run: ditz resolve abc123
+```
+
+### Commands
+
+```bash
+ditz init                    # Create ditz-metadata branch
+ditz sync                    # Fetch, merge, push
+ditz sync --pull-only        # Just fetch and merge
+ditz sync --push-only        # Just push
+
+# These all work transparently with the branch:
+ditz add "Fix thing"         # Commits to ditz-metadata
+ditz close abc123            # Commits to ditz-metadata
+ditz list                    # Reads from ditz-metadata
+```
+
+### Auto-Sync Option
+
+For convenience, auto-sync after every write:
+```bash
+ditz config set auto-sync true
+ditz add "Fix thing"         # Also runs sync
+```
+
+But off by default. Explicit is better.
+
+### Implementation Notes
+
+Use `git worktree add --detach` or sparse checkout to access ditz-metadata without disturbing the working tree. The user never sees a .ditz directory.
+
+```bash
+# Pseudocode for every ditz command:
+temp_dir = mktemp()
+git worktree add --detach $temp_dir ditz-metadata
+# ... do work in $temp_dir/.ditz/ ...
+git -C $temp_dir add -A
+git -C $temp_dir commit -m "ditz: $command"
+git worktree remove $temp_dir
+```
+
+Or use git's index directly without a worktree checkout (faster, more complex).
+
 ## Non-Goals
 
 Things we're explicitly NOT doing:
 - No sqlite (files only)
 - No daemon process
-- No sync/merge driver (just use git)
+- No complex merge driver (auto-resolve or bail)
 - No external service integration (no JIRA bridge)
 - No web UI server
 
