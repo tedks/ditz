@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (public_name ditz)
+ (libraries ditz cmdliner fmt fmt.tty logs logs.fmt))
