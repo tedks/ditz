@@ -104,3 +104,75 @@ let disposition_to_string = function
   | Fixed -> "fixed"
   | Wontfix -> "wontfix"
   | Reorg -> "reorg"
+
+(* JSON output helpers *)
+
+let escape_json_string s =
+  let b = Buffer.create (String.length s * 2) in
+  String.iter (fun c ->
+    match c with
+    | '"' -> Buffer.add_string b "\\\""
+    | '\\' -> Buffer.add_string b "\\\\"
+    | '\n' -> Buffer.add_string b "\\n"
+    | '\r' -> Buffer.add_string b "\\r"
+    | '\t' -> Buffer.add_string b "\\t"
+    | c when Char.code c < 32 -> Buffer.add_string b (Printf.sprintf "\\u%04x" (Char.code c))
+    | c -> Buffer.add_char b c
+  ) s;
+  Buffer.contents b
+
+let file_ref_to_json (ref : file_ref) =
+  let line_str = match ref.line with
+    | Some l -> Printf.sprintf "%d" l
+    | None -> "null"
+  in
+  let note_str = match ref.note with
+    | Some n -> Printf.sprintf {|"%s"|} (escape_json_string n)
+    | None -> "null"
+  in
+  Printf.sprintf {|{"path":"%s","line":%s,"note":%s}|}
+    (escape_json_string ref.path) line_str note_str
+
+let log_event_to_json (ev : log_event) =
+  Printf.sprintf {|{"time":"%s","who":"%s","what":"%s","comment":"%s"}|}
+    (escape_json_string ev.time)
+    (escape_json_string ev.who)
+    (escape_json_string ev.what)
+    (escape_json_string ev.comment)
+
+let option_to_json f = function
+  | None -> "null"
+  | Some x -> f x
+
+let list_to_json f xs =
+  "[" ^ (String.concat "," (List.map f xs)) ^ "]"
+
+let string_to_json s = Printf.sprintf {|"%s"|} (escape_json_string s)
+
+let issue_to_json issue =
+  Printf.sprintf
+    {|{"id":"%s","title":"%s","desc":"%s","type":"%s","component":"%s","release":%s,"reporter":"%s","status":"%s","disposition":%s,"creation_time":"%s","references":%s,"log_events":%s,"blocks":%s,"blocked_by":%s,"file_refs":%s}|}
+    (escape_json_string issue.id)
+    (escape_json_string issue.title)
+    (escape_json_string issue.desc)
+    (issue_type_to_string issue.issue_type)
+    (escape_json_string issue.component)
+    (option_to_json string_to_json issue.release)
+    (escape_json_string issue.reporter)
+    (status_to_string issue.status)
+    (option_to_json (fun d -> string_to_json (disposition_to_string d)) issue.disposition)
+    (escape_json_string issue.creation_time)
+    (list_to_json string_to_json issue.references)
+    (list_to_json log_event_to_json issue.log_events)
+    (list_to_json string_to_json issue.blocks)
+    (list_to_json string_to_json issue.blocked_by)
+    (list_to_json file_ref_to_json issue.file_refs)
+
+let issues_to_json issues =
+  list_to_json issue_to_json issues
+
+let simple_issue_json issue =
+  Printf.sprintf {|{"id":"%s","title":"%s","status":"%s"}|}
+    (escape_json_string issue.id)
+    (escape_json_string issue.title)
+    (status_to_string issue.status)

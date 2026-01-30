@@ -22,6 +22,11 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 - [x] `drop` command (delete an issue)
 - [x] Dependency tracking fields (blocks, blocked_by)
 - [x] File reference fields (file_refs)
+- [x] `--json` flag on all commands
+- [x] `--ids-only` flag for quiet output
+- [x] `context` command (dump all open issues for LLM context)
+- [x] `ready` command (show issues ready to work on)
+- [x] Batch operations (`close` accepts multiple IDs)
 
 ## Phase 1: Core Commands
 
