@@ -15,15 +15,22 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 - [x] `init` command (creates .ditz directory)
 - [x] `list` command (shows all issues)
 - [x] `add` command (creates issue with title)
+- [x] `show` command (display full issue details)
+- [x] `start` command (mark issue in_progress)
+- [x] `stop` command (mark issue paused)
+- [x] `close` command (close with disposition)
+- [x] `drop` command (delete an issue)
+- [x] Dependency tracking fields (blocks, blocked_by)
+- [x] File reference fields (file_refs)
 
 ## Phase 1: Core Commands
 
 ### Issue Lifecycle
-- [ ] `show <id>` - Display full issue details
-- [ ] `start <id>` - Mark issue in_progress
-- [ ] `stop <id>` - Mark issue paused
-- [ ] `close <id> [--fixed|--wontfix|--reorg]` - Close with disposition
-- [ ] `drop <id>` - Delete an issue
+- [x] `show <id>` - Display full issue details
+- [x] `start <id>` - Mark issue in_progress
+- [x] `stop <id>` - Mark issue paused
+- [x] `close <id> [--fixed|--wontfix|--reorg]` - Close with disposition
+- [x] `drop <id>` - Delete an issue
 
 ### Issue Modification
 - [ ] `edit <id>` - Open issue in $EDITOR

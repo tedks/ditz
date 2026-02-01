@@ -2,3 +2,4 @@
 
 module Types = Types
 module Storage = Storage
+module Issue_ops = Issue_ops

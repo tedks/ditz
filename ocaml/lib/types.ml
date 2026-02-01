@@ -17,6 +17,13 @@ type log_event = {
 }
 [@@deriving yaml]
 
+type file_ref = {
+  path: string;
+  line: int option;
+  note: string option;
+}
+[@@deriving yaml]
+
 type issue = {
   id: string;
   title: string;
@@ -30,6 +37,9 @@ type issue = {
   creation_time: string;
   references: string list;
   log_events: log_event list;
+  blocks: string list; [@default []]
+  blocked_by: string list; [@default []]
+  file_refs: file_ref list; [@default []]
 }
 [@@deriving yaml]
 
@@ -66,6 +76,8 @@ type config = {
 
 (* Helpers *)
 
+let () = Random.self_init ()
+
 let make_id ~title ~desc ~reporter =
   let now = Ptime_clock.now () |> Ptime.to_rfc3339 in
   let data = String.concat "\n" [now; string_of_float (Random.float 1.0); reporter; title; desc] in
@@ -87,3 +99,8 @@ let status_widget = function
   | In_progress -> ">"
   | Paused -> "="
   | Closed -> "x"
+
+let disposition_to_string = function
+  | Fixed -> "fixed"
+  | Wontfix -> "wontfix"
+  | Reorg -> "reorg"
