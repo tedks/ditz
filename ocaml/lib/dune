@@ -1,5 +1,5 @@
 (library
  (name ditz)
  (public_name ditz)
- (libraries yaml digestif fmt logs ptime ptime.clock.os unix)
+ (libraries yaml digestif fmt logs ptime ptime.clock.os unix str)
  (preprocess (pps ppx_deriving_yaml)))

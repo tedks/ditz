@@ -22,6 +22,21 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 - [x] `drop` command (delete an issue)
 - [x] Dependency tracking fields (blocks, blocked_by)
 - [x] File reference fields (file_refs)
+- [x] `--json` flag on all commands
+- [x] `--ids-only` flag for quiet output
+- [x] `context` command (dump all open issues for LLM context)
+- [x] `ready` command (show issues ready to work on)
+- [x] Batch operations (`close`, `start`, `stop` accept multiple IDs)
+- [x] `comment` command (add comments to issues)
+- [x] Idempotent creates (`--id` flag)
+- [x] Stdin support (`--desc-stdin`, `--stdin`)
+- [x] List filtering (`--type`, `--component`, `--status`)
+- [x] `blocks` / `unblocks` commands (dependency management)
+- [x] `ref` command (add file references)
+- [x] `set` command (update issue fields)
+- [x] `search` command (full-text search)
+- [x] `assign` / `unassign` commands (release management)
+- [x] `status` command (project overview)
 
 ## Phase 1: Core Commands
 
@@ -34,13 +49,17 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 
 ### Issue Modification
 - [ ] `edit <id>` - Open issue in $EDITOR
-- [ ] `comment <id>` - Add comment to log
-- [ ] `assign <id> <release>` - Assign to release
-- [ ] `unassign <id>` - Remove from release
-- [ ] `set-component <id> <component>` - Change component
+- [x] `comment <id>` - Add comment to log
+- [x] `assign <id> <release>` - Assign to release
+- [x] `unassign <id>` - Remove from release
+- [x] `set <id>` - Change issue fields (type, component, title, desc)
+- [x] `ref <id> <path>` - Add file reference
+- [x] `blocks <a> <b>` - Mark dependency relationship
+- [x] `unblocks <a> <b>` - Remove dependency relationship
+- [x] `search <query>` - Full-text search across issues
 
 ### Project Management
-- [ ] `status` - Overview of project state
+- [x] `status` - Overview of project state
 - [ ] `add-release <name>` - Create new release
 - [ ] `release <name>` - Mark release as shipped
 - [ ] `add-component <name>` - Create new component

@@ -32,3 +32,123 @@ let stop_issue (issue : issue) ~who =
     Error (`Msg (Printf.sprintf "issue %s is closed" issue.id))
   else
     Ok (add_log_event { issue with status = Paused } ~who ~what:"stopped" ~comment:"")
+
+let add_comment (issue : issue) ~who ~comment =
+  add_log_event issue ~who ~what:"commented" ~comment
+
+(* Dependency management *)
+
+let add_blocks (issue : issue) ~blocked_id ~who =
+  if List.mem blocked_id issue.blocks then
+    issue (* Already blocking, no-op *)
+  else
+    let issue = { issue with blocks = issue.blocks @ [blocked_id] } in
+    add_log_event issue ~who ~what:(Printf.sprintf "blocks %s" blocked_id) ~comment:""
+
+let remove_blocks (issue : issue) ~blocked_id ~who =
+  if not (List.mem blocked_id issue.blocks) then
+    issue (* Not blocking, no-op *)
+  else
+    let issue = { issue with blocks = List.filter (fun id -> id <> blocked_id) issue.blocks } in
+    add_log_event issue ~who ~what:(Printf.sprintf "no longer blocks %s" blocked_id) ~comment:""
+
+let add_blocked_by (issue : issue) ~blocker_id ~who =
+  if List.mem blocker_id issue.blocked_by then
+    issue (* Already blocked, no-op *)
+  else
+    let issue = { issue with blocked_by = issue.blocked_by @ [blocker_id] } in
+    add_log_event issue ~who ~what:(Printf.sprintf "blocked by %s" blocker_id) ~comment:""
+
+let remove_blocked_by (issue : issue) ~blocker_id ~who =
+  if not (List.mem blocker_id issue.blocked_by) then
+    issue (* Not blocked, no-op *)
+  else
+    let issue = { issue with blocked_by = List.filter (fun id -> id <> blocker_id) issue.blocked_by } in
+    add_log_event issue ~who ~what:(Printf.sprintf "no longer blocked by %s" blocker_id) ~comment:""
+
+(* File references *)
+
+let add_file_ref (issue : issue) ~path ~line ~note ~who =
+  let ref : file_ref = { path; line; note } in
+  (* Check if reference already exists *)
+  let exists = List.exists (fun (r : file_ref) ->
+    r.path = path && r.line = line
+  ) issue.file_refs in
+  if exists then
+    issue (* Already exists, no-op *)
+  else
+    let issue = { issue with file_refs = issue.file_refs @ [ref] } in
+    let loc = match line with
+      | Some l -> Printf.sprintf "%s:%d" path l
+      | None -> path
+    in
+    add_log_event issue ~who ~what:(Printf.sprintf "referenced %s" loc) ~comment:""
+
+let remove_file_ref (issue : issue) ~path ~line ~who =
+  let original_count = List.length issue.file_refs in
+  let file_refs = List.filter (fun (r : file_ref) ->
+    not (r.path = path && r.line = line)
+  ) issue.file_refs in
+  if List.length file_refs = original_count then
+    issue (* Nothing removed, no-op *)
+  else
+    let issue = { issue with file_refs } in
+    let loc = match line with
+      | Some l -> Printf.sprintf "%s:%d" path l
+      | None -> path
+    in
+    add_log_event issue ~who ~what:(Printf.sprintf "removed reference %s" loc) ~comment:""
+
+(* Field updates *)
+
+let set_type (issue : issue) ~issue_type ~who =
+  if issue.issue_type = issue_type then
+    issue
+  else
+    let issue = { issue with issue_type } in
+    add_log_event issue ~who ~what:(Printf.sprintf "changed type to %s" (issue_type_to_string issue_type)) ~comment:""
+
+let set_component (issue : issue) ~component ~who =
+  if issue.component = component then
+    issue
+  else
+    let old_component = issue.component in
+    let issue = { issue with component } in
+    add_log_event issue ~who ~what:(Printf.sprintf "changed component from %s to %s" old_component component) ~comment:""
+
+let set_title (issue : issue) ~title ~who =
+  if issue.title = title then
+    issue
+  else
+    let issue = { issue with title } in
+    add_log_event issue ~who ~what:"changed title" ~comment:""
+
+let set_desc (issue : issue) ~desc ~who =
+  let issue = { issue with desc } in
+  add_log_event issue ~who ~what:"updated description" ~comment:""
+
+let assign_release (issue : issue) ~release ~who =
+  let issue = { issue with release = Some release } in
+  add_log_event issue ~who ~what:(Printf.sprintf "assigned to release %s" release) ~comment:""
+
+let unassign_release (issue : issue) ~who =
+  match issue.release with
+  | None -> issue
+  | Some old_release ->
+    let issue = { issue with release = None } in
+    add_log_event issue ~who ~what:(Printf.sprintf "unassigned from release %s" old_release) ~comment:""
+
+(* Search *)
+
+let matches_search (issue : issue) ~query =
+  let query = String.lowercase_ascii query in
+  let check s = String.lowercase_ascii s |> fun s ->
+    try let _ = Str.search_forward (Str.regexp_string query) s 0 in true
+    with Not_found -> false
+  in
+  check issue.id ||
+  check issue.title ||
+  check issue.desc ||
+  check issue.component ||
+  check issue.reporter ||
+  List.exists (fun (ev : log_event) -> check ev.comment) issue.log_events
