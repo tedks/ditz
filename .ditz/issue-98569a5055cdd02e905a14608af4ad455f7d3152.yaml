@@ -7,12 +7,17 @@ component: default
 release:
 reporter: Test User <test@example.com>
 status:
-  Unstarted: []
+  Closed: []
 disposition:
+  Fixed: []
 creation_time: 2026-02-02T18:55:49-00:00
 references: []
 log_events:
 - time: 2026-02-02T18:55:49-00:00
   who: Test User
   what: created
+  comment: ""
+- time: 2026-02-02T19:08:21-00:00
+  who: Test User
+  what: 'closed: fixed'
   comment: ""
