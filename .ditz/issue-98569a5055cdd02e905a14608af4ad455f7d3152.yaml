@@ -1,0 +1,18 @@
+id: 98569a5055cdd02e905a14608af4ad455f7d3152
+title: Migrate to opam-nix for instant dev shell
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-02T18:55:49-00:00
+references: []
+log_events:
+- time: 2026-02-02T18:55:49-00:00
+  who: Test User
+  what: created
+  comment: ""
