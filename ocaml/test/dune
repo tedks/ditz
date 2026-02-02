@@ -29,3 +29,7 @@
 (test
  (name search_test)
  (libraries ditz))
+
+(test
+ (name git_test)
+ (libraries ditz unix))
