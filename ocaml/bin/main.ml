@@ -602,6 +602,326 @@ let comment_cmd =
   in
   Cmd.v info Term.(const run $ id_arg $ comment_arg $ stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 
+(* Blocks command - add blocking relationship *)
+let blocks_cmd =
+  let doc = "Mark that an issue blocks another issue" in
+  let info = Cmd.info "blocks" ~doc in
+  let blocker_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"BLOCKER" ~doc:"Issue that blocks") in
+  let blocked_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"BLOCKED" ~doc:"Issue that is blocked") in
+  let run blocker_id blocked_id json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      (* Find both issues *)
+      match Ditz.Storage.find_issue_by_id config.issue_dir blocker_id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error finding blocker: %s@." e; 1
+      | Ok blocker ->
+        match Ditz.Storage.find_issue_by_id config.issue_dir blocked_id with
+        | Error (`Msg e) ->
+          Fmt.epr "Error finding blocked: %s@." e; 1
+        | Ok blocked ->
+          (* Update both issues *)
+          let blocker = Ditz.Issue_ops.add_blocks blocker ~blocked_id:blocked.id ~who:config.name in
+          let blocked = Ditz.Issue_ops.add_blocked_by blocked ~blocker_id:blocker.id ~who:config.name in
+          match Ditz.Storage.save_issue config.issue_dir blocker with
+          | Error (`Msg e) ->
+            Fmt.epr "Error saving blocker: %s@." e; 1
+          | Ok () ->
+            match Ditz.Storage.save_issue config.issue_dir blocked with
+            | Error (`Msg e) ->
+              Fmt.epr "Error saving blocked: %s@." e; 1
+            | Ok () ->
+              (match mode with
+               | Json ->
+                 Fmt.pr {|{"blocker":"%s","blocked":"%s"}@.|}
+                   (Ditz.Types.escape_json_string blocker.id)
+                   (Ditz.Types.escape_json_string blocked.id)
+               | Quiet -> Fmt.pr "%s %s@." blocker.id blocked.id
+               | Human -> Fmt.pr "%s now blocks %s@." blocker.id blocked.id);
+              0
+  in
+  Cmd.v info Term.(const run $ blocker_arg $ blocked_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Unblocks command - remove blocking relationship *)
+let unblocks_cmd =
+  let doc = "Remove blocking relationship between issues" in
+  let info = Cmd.info "unblocks" ~doc in
+  let blocker_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"BLOCKER" ~doc:"Issue that was blocking") in
+  let blocked_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"BLOCKED" ~doc:"Issue that was blocked") in
+  let run blocker_id blocked_id json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      match Ditz.Storage.find_issue_by_id config.issue_dir blocker_id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error finding blocker: %s@." e; 1
+      | Ok blocker ->
+        match Ditz.Storage.find_issue_by_id config.issue_dir blocked_id with
+        | Error (`Msg e) ->
+          Fmt.epr "Error finding blocked: %s@." e; 1
+        | Ok blocked ->
+          let blocker = Ditz.Issue_ops.remove_blocks blocker ~blocked_id:blocked.id ~who:config.name in
+          let blocked = Ditz.Issue_ops.remove_blocked_by blocked ~blocker_id:blocker.id ~who:config.name in
+          match Ditz.Storage.save_issue config.issue_dir blocker with
+          | Error (`Msg e) ->
+            Fmt.epr "Error saving blocker: %s@." e; 1
+          | Ok () ->
+            match Ditz.Storage.save_issue config.issue_dir blocked with
+            | Error (`Msg e) ->
+              Fmt.epr "Error saving blocked: %s@." e; 1
+            | Ok () ->
+              (match mode with
+               | Json ->
+                 Fmt.pr {|{"blocker":"%s","blocked":"%s","unblocked":true}@.|}
+                   (Ditz.Types.escape_json_string blocker.id)
+                   (Ditz.Types.escape_json_string blocked.id)
+               | Quiet -> Fmt.pr "%s %s@." blocker.id blocked.id
+               | Human -> Fmt.pr "%s no longer blocks %s@." blocker.id blocked.id);
+              0
+  in
+  Cmd.v info Term.(const run $ blocker_arg $ blocked_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Ref command - add file reference *)
+let ref_cmd =
+  let doc = "Add a file reference to an issue" in
+  let info = Cmd.info "ref" ~doc in
+  let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
+  let path_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"PATH" ~doc:"File path (optionally with :LINE)") in
+  let note_opt = Arg.(value & opt (some string) None & info ["note"; "n"] ~docv:"NOTE" ~doc:"Note about this reference") in
+  let run id path_spec note json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      (* Parse path:line format *)
+      let (path, line) =
+        match String.rindex_opt path_spec ':' with
+        | None -> (path_spec, None)
+        | Some i ->
+          let after_colon = String.sub path_spec (i + 1) (String.length path_spec - i - 1) in
+          match int_of_string_opt after_colon with
+          | Some l -> (String.sub path_spec 0 i, Some l)
+          | None -> (path_spec, None) (* Not a number, treat whole thing as path *)
+      in
+      match Ditz.Storage.find_issue_by_id config.issue_dir id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: %s@." e; 1
+      | Ok issue ->
+        let issue = Ditz.Issue_ops.add_file_ref issue ~path ~line ~note ~who:config.name in
+        match Ditz.Storage.save_issue config.issue_dir issue with
+        | Ok () ->
+          let loc = match line with Some l -> Printf.sprintf "%s:%d" path l | None -> path in
+          (match mode with
+           | Json ->
+             Fmt.pr {|{"id":"%s","ref":"%s"}@.|}
+               (Ditz.Types.escape_json_string issue.id)
+               (Ditz.Types.escape_json_string loc)
+           | Quiet -> Fmt.pr "%s@." issue.id
+           | Human -> Fmt.pr "Added reference %s to %s@." loc issue.id);
+          0
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
+  in
+  Cmd.v info Term.(const run $ id_arg $ path_arg $ note_opt $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Set command - update issue fields *)
+let set_cmd =
+  let doc = "Update issue fields" in
+  let info = Cmd.info "set" ~doc in
+  let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Set issue type (bug, feature, task)") in
+  let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Set component") in
+  let title_opt = Arg.(value & opt (some string) None & info ["title"] ~docv:"TITLE" ~doc:"Set title") in
+  let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
+  let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
+  let run id type_str component title desc desc_stdin json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      match Ditz.Storage.find_issue_by_id config.issue_dir id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: %s@." e; 1
+      | Ok issue ->
+        (* Apply updates *)
+        let issue = match type_str with
+          | None -> issue
+          | Some t ->
+            match issue_type_of_string t with
+            | None -> Fmt.epr "Warning: unknown type '%s'@." t; issue
+            | Some typ -> Ditz.Issue_ops.set_type issue ~issue_type:typ ~who:config.name
+        in
+        let issue = match component with
+          | None -> issue
+          | Some c -> Ditz.Issue_ops.set_component issue ~component:c ~who:config.name
+        in
+        let issue = match title with
+          | None -> issue
+          | Some t -> Ditz.Issue_ops.set_title issue ~title:t ~who:config.name
+        in
+        let issue = match (desc, desc_stdin) with
+          | (Some d, false) -> Ditz.Issue_ops.set_desc issue ~desc:d ~who:config.name
+          | (None, true) -> Ditz.Issue_ops.set_desc issue ~desc:(read_stdin ()) ~who:config.name
+          | (Some _, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; issue
+          | (None, false) -> issue
+        in
+        match Ditz.Storage.save_issue config.issue_dir issue with
+        | Ok () ->
+          (match mode with
+           | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
+           | Quiet -> Fmt.pr "%s@." issue.id
+           | Human -> Fmt.pr "Updated issue %s@." issue.id);
+          0
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
+  in
+  Cmd.v info Term.(const run $ id_arg $ type_opt $ component_opt $ title_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Search command *)
+let search_cmd =
+  let doc = "Search issues by text" in
+  let info = Cmd.info "search" ~doc in
+  let query_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"QUERY" ~doc:"Search query") in
+  let run query json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      let all_issues = Ditz.Storage.load_issues config.issue_dir in
+      let matches = List.filter (fun issue ->
+        Ditz.Issue_ops.matches_search issue ~query
+      ) all_issues in
+      (match mode with
+       | Json ->
+         Fmt.pr "%s@." (Ditz.Types.issues_to_json matches)
+       | Quiet ->
+         List.iter (fun (i : Ditz.Types.issue) -> Fmt.pr "%s@." i.id) matches
+       | Human ->
+         if matches = [] then
+           Fmt.pr "No issues match '%s'@." query
+         else begin
+           Fmt.pr "Found %d issue(s) matching '%s':@.@." (List.length matches) query;
+           List.iter (fun (issue : Ditz.Types.issue) ->
+             let widget = Ditz.Types.status_widget issue.status in
+             Fmt.pr "[%s] %s: %s@." widget issue.id issue.title
+           ) matches
+         end);
+      0
+  in
+  Cmd.v info Term.(const run $ query_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Assign command - assign to release *)
+let assign_cmd =
+  let doc = "Assign issue to a release" in
+  let info = Cmd.info "assign" ~doc in
+  let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
+  let release_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"RELEASE" ~doc:"Release name") in
+  let run id release json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      match Ditz.Storage.find_issue_by_id config.issue_dir id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: %s@." e; 1
+      | Ok issue ->
+        let issue = Ditz.Issue_ops.assign_release issue ~release ~who:config.name in
+        match Ditz.Storage.save_issue config.issue_dir issue with
+        | Ok () ->
+          (match mode with
+           | Json ->
+             Fmt.pr {|{"id":"%s","release":"%s"}@.|}
+               (Ditz.Types.escape_json_string issue.id)
+               (Ditz.Types.escape_json_string release)
+           | Quiet -> Fmt.pr "%s@." issue.id
+           | Human -> Fmt.pr "Assigned %s to release %s@." issue.id release);
+          0
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
+  in
+  Cmd.v info Term.(const run $ id_arg $ release_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Unassign command - remove from release *)
+let unassign_cmd =
+  let doc = "Remove issue from its release" in
+  let info = Cmd.info "unassign" ~doc in
+  let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
+  let run id json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      match Ditz.Storage.find_issue_by_id config.issue_dir id with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: %s@." e; 1
+      | Ok issue ->
+        let issue = Ditz.Issue_ops.unassign_release issue ~who:config.name in
+        match Ditz.Storage.save_issue config.issue_dir issue with
+        | Ok () ->
+          (match mode with
+           | Json ->
+             Fmt.pr {|{"id":"%s","release":null}@.|} (Ditz.Types.escape_json_string issue.id)
+           | Quiet -> Fmt.pr "%s@." issue.id
+           | Human -> Fmt.pr "Unassigned %s from release@." issue.id);
+          0
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
+  in
+  Cmd.v info Term.(const run $ id_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* Status command - project overview *)
+let status_cmd =
+  let doc = "Show project status overview" in
+  let info = Cmd.info "status" ~doc in
+  let run json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      let issues = Ditz.Storage.load_issues config.issue_dir in
+      (* Count by status *)
+      let count_status st = List.length (List.filter (fun (i : Ditz.Types.issue) -> i.status = st) issues) in
+      let unstarted = count_status Ditz.Types.Unstarted in
+      let in_progress = count_status Ditz.Types.In_progress in
+      let paused = count_status Ditz.Types.Paused in
+      let closed = count_status Ditz.Types.Closed in
+      (* Count by type (open only) *)
+      let open_issues = List.filter (fun (i : Ditz.Types.issue) -> i.status <> Ditz.Types.Closed) issues in
+      let count_type t = List.length (List.filter (fun (i : Ditz.Types.issue) -> i.issue_type = t) open_issues) in
+      let bugs = count_type Ditz.Types.Bugfix in
+      let features = count_type Ditz.Types.Feature in
+      let tasks = count_type Ditz.Types.Task in
+      (match mode with
+       | Json ->
+         Fmt.pr {|{"total":%d,"open":%d,"unstarted":%d,"in_progress":%d,"paused":%d,"closed":%d,"bugs":%d,"features":%d,"tasks":%d}@.|}
+           (List.length issues) (List.length open_issues) unstarted in_progress paused closed bugs features tasks
+       | Quiet ->
+         Fmt.pr "%d %d %d %d %d@." (List.length open_issues) unstarted in_progress paused closed
+       | Human ->
+         Fmt.pr "Project Status@.@.";
+         Fmt.pr "Total issues: %d@." (List.length issues);
+         Fmt.pr "Open: %d (unstarted: %d, in progress: %d, paused: %d)@."
+           (List.length open_issues) unstarted in_progress paused;
+         Fmt.pr "Closed: %d@.@." closed;
+         Fmt.pr "Open by type:@.";
+         Fmt.pr "  Bugs: %d@." bugs;
+         Fmt.pr "  Features: %d@." features;
+         Fmt.pr "  Tasks: %d@." tasks);
+      0
+  in
+  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+
 let main_cmd =
   let doc = "Distributed issue tracker" in
   let info = Cmd.info "ditz" ~version:"0.1.0-ocaml" ~doc in
@@ -617,6 +937,14 @@ let main_cmd =
     context_cmd;
     ready_cmd;
     comment_cmd;
+    blocks_cmd;
+    unblocks_cmd;
+    ref_cmd;
+    set_cmd;
+    search_cmd;
+    assign_cmd;
+    unassign_cmd;
+    status_cmd;
   ]
 
 let () = exit (Cmd.eval' main_cmd)
