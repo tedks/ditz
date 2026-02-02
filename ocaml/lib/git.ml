@@ -1,6 +1,13 @@
 (** Git integration for ditz - reads/writes from ditz-metadata branch *)
 
 let ditz_branch = "ditz-metadata"
+let worktree_dir = ".ditz-worktree"
+
+(** Check if using ephemeral worktree mode (old behavior) *)
+let use_ephemeral_worktree () =
+  match Sys.getenv_opt "DITZ_EPHEMERAL_WORKTREE" with
+  | Some "1" | Some "true" -> true
+  | _ -> false
 
 (** Run a git command and return stdout, stderr, and exit code *)
 let run_git_command ?(cwd = ".") args =
@@ -55,6 +62,80 @@ let branch_exists ?(remote = false) branch =
 (** Check if ditz-metadata branch exists (locally or on remote) *)
 let ditz_metadata_exists () =
   branch_exists ditz_branch || branch_exists ~remote:true ditz_branch
+
+(** Get path to persistent worktree *)
+let persistent_worktree_path () =
+  match find_git_root () with
+  | Some root -> Some (Filename.concat root worktree_dir)
+  | None -> None
+
+(** Check if persistent worktree exists and is valid *)
+let persistent_worktree_valid () =
+  match persistent_worktree_path () with
+  | None -> false
+  | Some path ->
+    Sys.file_exists path && Sys.is_directory path &&
+    (* Check it's actually a worktree for ditz-metadata *)
+    match git ~cwd:path ["rev-parse"; "--abbrev-ref"; "HEAD"] with
+    | Ok branch -> String.trim branch = ditz_branch
+    | Error _ -> false
+
+(** Create persistent worktree with sparse checkout *)
+let create_persistent_worktree () =
+  match persistent_worktree_path () with
+  | None -> Error (`Msg "Not in a git repository")
+  | Some path ->
+    if Sys.file_exists path then
+      (* Already exists, verify it's correct *)
+      if persistent_worktree_valid () then Ok path
+      else Error (`Msg (Printf.sprintf "%s exists but is not a valid ditz worktree" path))
+    else
+      (* Create the worktree *)
+      match git ["worktree"; "add"; path; ditz_branch] with
+      | Error e -> Error e
+      | Ok _ ->
+        (* Set up sparse checkout to only include .ditz *)
+        match git ~cwd:path ["sparse-checkout"; "init"; "--cone"] with
+        | Error e -> Error e
+        | Ok _ ->
+          match git ~cwd:path ["sparse-checkout"; "set"; ".ditz"] with
+          | Error e -> Error e
+          | Ok _ -> Ok path
+
+(** Ensure persistent worktree exists, create if needed *)
+let ensure_persistent_worktree () =
+  if persistent_worktree_valid () then
+    match persistent_worktree_path () with
+    | Some path -> Ok path
+    | None -> Error (`Msg "Not in a git repository")
+  else
+    create_persistent_worktree ()
+
+(** Execute a function with a worktree path. Uses persistent worktree by default,
+    or ephemeral worktree if DITZ_EPHEMERAL_WORKTREE=1 and no persistent worktree exists.
+    Note: git only allows one worktree per branch, so if persistent exists we must use it. *)
+let with_worktree f =
+  (* If persistent worktree exists, always use it (git won't allow a second worktree) *)
+  if persistent_worktree_valid () then
+    match persistent_worktree_path () with
+    | Some path -> f path
+    | None -> Error (`Msg "Not in a git repository")
+  else if use_ephemeral_worktree () then
+    (* Ephemeral mode: create temp worktree, use it, remove it *)
+    let temp_dir = Filename.temp_file "ditz_worktree" "" in
+    Sys.remove temp_dir;
+    match git ["worktree"; "add"; temp_dir; ditz_branch] with
+    | Error e -> Error e
+    | Ok _ ->
+      let result = f temp_dir in
+      let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
+      let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
+      result
+  else
+    (* Default: create and use persistent worktree *)
+    match ensure_persistent_worktree () with
+    | Error e -> Error e
+    | Ok path -> f path
 
 (** Create the ditz-metadata orphan branch with initial project structure *)
 let create_ditz_metadata_branch ~project_name =
@@ -122,69 +203,46 @@ let list_ditz_files () =
     else String.split_on_char '\n' output
   | Error _ -> []
 
-(** Write content to a file on ditz-metadata branch using git worktree *)
+(** Write content to a file on ditz-metadata branch using worktree *)
 let write_to_branch ~path ~content ~commit_msg =
-  let _git_root = match find_git_root () with
-    | Some r -> r
-    | None -> failwith "Not in a git repository"
-  in
-  let temp_dir = Filename.temp_file "ditz_write" "" in
-  Sys.remove temp_dir;
+  with_worktree (fun worktree_path ->
+    (* Write the file *)
+    let full_path = Filename.concat worktree_path path in
+    let dir = Filename.dirname full_path in
+    let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
+    let oc = open_out full_path in
+    output_string oc content;
+    close_out oc;
 
-  match git ["worktree"; "add"; temp_dir; ditz_branch] with
-  | Error e -> Error e
-  | Ok _ ->
-    let result =
-      (* Write the file *)
-      let full_path = Filename.concat temp_dir path in
-      let dir = Filename.dirname full_path in
-      let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
-      let oc = open_out full_path in
-      output_string oc content;
-      close_out oc;
-
-      (* Add and commit *)
-      match git ~cwd:temp_dir ["add"; path] with
-      | Error e -> Error e
-      | Ok _ ->
-        (* Check if there are changes to commit *)
-        match git ~cwd:temp_dir ["diff"; "--cached"; "--quiet"] with
-        | Ok _ -> Ok () (* No changes staged, nothing to commit *)
-        | Error _ ->
-          (* There are staged changes, commit them *)
-          match git ~cwd:temp_dir ["commit"; "-m"; commit_msg] with
-          | Error e -> Error e
-          | Ok _ -> Ok ()
-    in
-    (* Clean up worktree *)
-    let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
-    let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
-    result
+    (* Add and commit *)
+    match git ~cwd:worktree_path ["add"; path] with
+    | Error e -> Error e
+    | Ok _ ->
+      (* Check if there are changes to commit *)
+      match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"] with
+      | Ok _ -> Ok () (* No changes staged, nothing to commit *)
+      | Error _ ->
+        (* There are staged changes, commit them *)
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
+        | Error e -> Error e
+        | Ok _ -> Ok ()
+  )
 
 (** Delete a file from ditz-metadata branch *)
 let delete_from_branch ~path ~commit_msg =
-  let temp_dir = Filename.temp_file "ditz_delete" "" in
-  Sys.remove temp_dir;
-
-  match git ["worktree"; "add"; temp_dir; ditz_branch] with
-  | Error e -> Error e
-  | Ok _ ->
-    let result =
-      let full_path = Filename.concat temp_dir path in
-      if Sys.file_exists full_path then begin
-        Sys.remove full_path;
-        match git ~cwd:temp_dir ["add"; path] with
+  with_worktree (fun worktree_path ->
+    let full_path = Filename.concat worktree_path path in
+    if Sys.file_exists full_path then begin
+      Sys.remove full_path;
+      match git ~cwd:worktree_path ["add"; path] with
+      | Error e -> Error e
+      | Ok _ ->
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
         | Error e -> Error e
-        | Ok _ ->
-          match git ~cwd:temp_dir ["commit"; "-m"; commit_msg] with
-          | Error e -> Error e
-          | Ok _ -> Ok ()
-      end else
-        Error (`Msg (Printf.sprintf "File %s not found" path))
-    in
-    let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
-    let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
-    result
+        | Ok _ -> Ok ()
+    end else
+      Error (`Msg (Printf.sprintf "File %s not found" path))
+  )
 
 (** Fetch ditz-metadata from origin *)
 let fetch () =
@@ -198,24 +256,14 @@ let fetch () =
 let merge () =
   if not (branch_exists ~remote:true ditz_branch) then
     Ok () (* Nothing to merge *)
-  else begin
-    let temp_dir = Filename.temp_file "ditz_merge" "" in
-    Sys.remove temp_dir;
-
-    match git ["worktree"; "add"; temp_dir; ditz_branch] with
-    | Error e -> Error e
-    | Ok _ ->
-      let result =
-        match git ~cwd:temp_dir ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
-        | Ok _ -> Ok ()
-        | Error e ->
-          (* TODO: implement conflict resolution *)
-          Error e
-      in
-      let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
-      let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
-      result
-  end
+  else
+    with_worktree (fun worktree_path ->
+      match git ~cwd:worktree_path ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
+      | Ok _ -> Ok ()
+      | Error e ->
+        (* TODO: implement conflict resolution *)
+        Error e
+    )
 
 (** Push ditz-metadata to origin *)
 let push () =

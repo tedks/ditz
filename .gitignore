@@ -1,5 +1,6 @@
 *.swp
 .ditz-config
+.ditz-worktree
 html
 
 # OCaml build artifacts
