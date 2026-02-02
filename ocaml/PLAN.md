@@ -26,7 +26,11 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 - [x] `--ids-only` flag for quiet output
 - [x] `context` command (dump all open issues for LLM context)
 - [x] `ready` command (show issues ready to work on)
-- [x] Batch operations (`close` accepts multiple IDs)
+- [x] Batch operations (`close`, `start`, `stop` accept multiple IDs)
+- [x] `comment` command (add comments to issues)
+- [x] Idempotent creates (`--id` flag)
+- [x] Stdin support (`--desc-stdin`, `--stdin`)
+- [x] List filtering (`--type`, `--component`, `--status`)
 
 ## Phase 1: Core Commands
 
@@ -39,7 +43,7 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 
 ### Issue Modification
 - [ ] `edit <id>` - Open issue in $EDITOR
-- [ ] `comment <id>` - Add comment to log
+- [x] `comment <id>` - Add comment to log
 - [ ] `assign <id> <release>` - Assign to release
 - [ ] `unassign <id>` - Remove from release
 - [ ] `set-component <id> <component>` - Change component
