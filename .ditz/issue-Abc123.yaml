@@ -1,0 +1,14 @@
+id: Abc123
+title: Test issue
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Tester <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-01-30T00:00:00Z
+references: []
+log_events: []
