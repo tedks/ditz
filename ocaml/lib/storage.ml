@@ -11,13 +11,14 @@ let config_file () =
   | None -> Error (`Msg "HOME not set; cannot locate config file")
 
 let validate_id id =
-  let is_alnum = function
-    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' -> true
+  (* Allow alphanumeric, dashes, and underscores for human-readable IDs *)
+  let is_valid_char = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '_' -> true
     | _ -> false
   in
   if id = "" then
     Error (`Msg "Invalid issue id: empty")
-  else if String.for_all is_alnum id then
+  else if String.for_all is_valid_char id then
     Ok id
   else
     Error (`Msg (Printf.sprintf "Invalid issue id '%s'" id))
@@ -135,3 +136,12 @@ let find_issue_by_id dir id_prefix =
   | _ ->
     let ids = List.map (fun (i : issue) -> i.id) matches in
     Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids)))
+
+let find_issue_by_exact_id dir id =
+  match issue_path dir id with
+  | Error _ as e -> e
+  | Ok path ->
+    if Sys.file_exists path then
+      load_issue path
+    else
+      Error (`Msg (Printf.sprintf "Issue %s not found" id))

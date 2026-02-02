@@ -28,16 +28,53 @@ module StringSet = Set.Make(String)
 
 (* Commands *)
 
+let issue_type_of_string s =
+  match String.lowercase_ascii s with
+  | "bug" | "bugfix" -> Some Ditz.Types.Bugfix
+  | "feature" -> Some Ditz.Types.Feature
+  | "task" -> Some Ditz.Types.Task
+  | _ -> None
+
+let status_of_string s =
+  match String.lowercase_ascii s with
+  | "unstarted" -> Some Ditz.Types.Unstarted
+  | "in_progress" | "inprogress" | "started" -> Some Ditz.Types.In_progress
+  | "paused" | "stopped" -> Some Ditz.Types.Paused
+  | "closed" -> Some Ditz.Types.Closed
+  | _ -> None
+
 let list_cmd =
   let doc = "List issues" in
   let info = Cmd.info "list" ~doc in
-  let run json quiet () =
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Filter by type (bug, feature, task)") in
+  let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Filter by component") in
+  let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Filter by status (unstarted, in_progress, paused, closed)") in
+  let run type_filter component_filter status_filter json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
       let issues = Ditz.Storage.load_issues config.issue_dir in
+      (* Apply filters *)
+      let issues = match type_filter with
+        | None -> issues
+        | Some t ->
+          match issue_type_of_string t with
+          | None -> Fmt.epr "Warning: unknown type '%s'@." t; issues
+          | Some typ -> List.filter (fun (i : Ditz.Types.issue) -> i.issue_type = typ) issues
+      in
+      let issues = match component_filter with
+        | None -> issues
+        | Some c -> List.filter (fun (i : Ditz.Types.issue) -> i.component = c) issues
+      in
+      let issues = match status_filter with
+        | None -> issues
+        | Some s ->
+          match status_of_string s with
+          | None -> Fmt.epr "Warning: unknown status '%s'@." s; issues
+          | Some st -> List.filter (fun (i : Ditz.Types.issue) -> i.status = st) issues
+      in
       (match mode with
        | Json ->
          Fmt.pr "%s@." (Ditz.Types.issues_to_json issues)
@@ -52,53 +89,117 @@ let list_cmd =
          ) issues);
       0
   in
-  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ type_opt $ component_opt $ status_opt $ json_flag $ quiet_flag $ setup_log_term)
+
+let read_stdin () =
+  let buf = Buffer.create 256 in
+  try
+    while true do
+      Buffer.add_channel buf stdin 1024
+    done;
+    Buffer.contents buf
+  with End_of_file ->
+    Buffer.contents buf |> String.trim
 
 let add_cmd =
   let doc = "Add a new issue" in
   let info = Cmd.info "add" ~doc in
   let title_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TITLE") in
-  let run title json quiet () =
+  let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"ID" ~doc:"Use specific ID (idempotent - returns existing issue if ID exists)") in
+  let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
+  let run title custom_id desc_stdin json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
-      let id = Ditz.Types.make_id ~title ~desc:"" ~reporter:config.name in
-      let now = Ditz.Issue_ops.now_rfc3339 () in
-      let issue : Ditz.Types.issue = {
-        id;
-        title;
-        desc = "";
-        issue_type = Ditz.Types.Task;
-        component = "default";
-        release = None;
-        reporter = Printf.sprintf "%s <%s>" config.name config.email;
-        status = Ditz.Types.Unstarted;
-        disposition = None;
-        creation_time = now;
-        references = [];
-        log_events = [{
-          time = now;
-          who = config.name;
-          what = "created";
-          comment = "";
-        }];
-        blocks = [];
-        blocked_by = [];
-        file_refs = [];
-      } in
-      match Ditz.Storage.save_issue config.issue_dir issue with
-      | Ok () ->
-        (match mode with
-         | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
-         | Quiet -> Fmt.pr "%s@." id
-         | Human -> Fmt.pr "Created issue %s@." id);
-        0
-      | Error (`Msg e) ->
-        Fmt.epr "Error: %s@." e; 1
+      let desc = if desc_stdin then read_stdin () else "" in
+      let id = match custom_id with
+        | Some id -> id
+        | None -> Ditz.Types.make_id ~title ~desc ~reporter:config.name
+      in
+      (* Check if issue with this ID already exists (idempotent) *)
+      match custom_id with
+      | Some _ -> (
+        match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
+        | Ok existing ->
+          (* Issue exists, return it *)
+          (match mode with
+           | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
+           | Quiet -> Fmt.pr "%s@." existing.id
+           | Human -> Fmt.pr "Issue %s already exists@." existing.id);
+          0
+        | Error _ ->
+          (* Issue doesn't exist, create it *)
+          let now = Ditz.Issue_ops.now_rfc3339 () in
+          let issue : Ditz.Types.issue = {
+            id;
+            title;
+            desc;
+            issue_type = Ditz.Types.Task;
+            component = "default";
+            release = None;
+            reporter = Printf.sprintf "%s <%s>" config.name config.email;
+            status = Ditz.Types.Unstarted;
+            disposition = None;
+            creation_time = now;
+            references = [];
+            log_events = [{
+              time = now;
+              who = config.name;
+              what = "created";
+              comment = "";
+            }];
+            blocks = [];
+            blocked_by = [];
+            file_refs = [];
+          } in
+          match Ditz.Storage.save_issue config.issue_dir issue with
+          | Ok () ->
+            (match mode with
+             | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
+             | Quiet -> Fmt.pr "%s@." id
+             | Human -> Fmt.pr "Created issue %s@." id);
+            0
+          | Error (`Msg e) ->
+            Fmt.epr "Error: %s@." e; 1
+      )
+      | None ->
+        (* No custom ID, always create new *)
+        let now = Ditz.Issue_ops.now_rfc3339 () in
+        let issue : Ditz.Types.issue = {
+          id;
+          title;
+          desc;
+          issue_type = Ditz.Types.Task;
+          component = "default";
+          release = None;
+          reporter = Printf.sprintf "%s <%s>" config.name config.email;
+          status = Ditz.Types.Unstarted;
+          disposition = None;
+          creation_time = now;
+          references = [];
+          log_events = [{
+            time = now;
+            who = config.name;
+            what = "created";
+            comment = "";
+          }];
+          blocks = [];
+          blocked_by = [];
+          file_refs = [];
+        } in
+        match Ditz.Storage.save_issue config.issue_dir issue with
+        | Ok () ->
+          (match mode with
+           | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
+           | Quiet -> Fmt.pr "%s@." id
+           | Human -> Fmt.pr "Created issue %s@." id);
+          0
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
   in
-  Cmd.v info Term.(const run $ title_arg $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ title_arg $ id_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 
 let init_cmd =
   let doc = "Initialize a new ditz project" in
@@ -461,6 +562,46 @@ let ready_cmd =
   in
   Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
 
+let comment_cmd =
+  let doc = "Add a comment to an issue" in
+  let info = Cmd.info "comment" ~doc in
+  let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID (or prefix)") in
+  let comment_arg = Arg.(value & pos 1 (some string) None & info [] ~docv:"COMMENT" ~doc:"Comment text (or use --stdin)") in
+  let stdin_flag = Arg.(value & flag & info ["stdin"] ~doc:"Read comment from stdin") in
+  let run id comment_text use_stdin json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      let comment = match (comment_text, use_stdin) with
+        | (Some c, false) -> c
+        | (None, true) -> read_stdin ()
+        | (Some _, true) ->
+          Fmt.epr "Error: cannot use both comment argument and --stdin@."; ""
+        | (None, false) ->
+          Fmt.epr "Error: provide comment text or use --stdin@."; ""
+      in
+      if comment = "" then 1
+      else
+        match Ditz.Storage.find_issue_by_id config.issue_dir id with
+        | Error (`Msg e) ->
+          Fmt.epr "Error: %s@." e; 1
+        | Ok issue ->
+          let issue = Ditz.Issue_ops.add_comment issue ~who:config.name ~comment in
+          match Ditz.Storage.save_issue config.issue_dir issue with
+          | Ok () ->
+            (match mode with
+             | Json ->
+               Fmt.pr {|{"id":"%s","commented":true}@.|} (Ditz.Types.escape_json_string issue.id)
+             | Quiet -> Fmt.pr "%s@." issue.id
+             | Human -> Fmt.pr "Added comment to %s@." issue.id);
+            0
+          | Error (`Msg e) ->
+            Fmt.epr "Error: %s@." e; 1
+  in
+  Cmd.v info Term.(const run $ id_arg $ comment_arg $ stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
+
 let main_cmd =
   let doc = "Distributed issue tracker" in
   let info = Cmd.info "ditz" ~version:"0.1.0-ocaml" ~doc in
@@ -475,6 +616,7 @@ let main_cmd =
     drop_cmd;
     context_cmd;
     ready_cmd;
+    comment_cmd;
   ]
 
 let () = exit (Cmd.eval' main_cmd)

@@ -32,3 +32,6 @@ let stop_issue (issue : issue) ~who =
     Error (`Msg (Printf.sprintf "issue %s is closed" issue.id))
   else
     Ok (add_log_event { issue with status = Paused } ~who ~what:"stopped" ~comment:"")
+
+let add_comment (issue : issue) ~who ~comment =
+  add_log_event issue ~who ~what:"commented" ~comment
