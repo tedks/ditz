@@ -27,10 +27,12 @@ let save_issue dir issue =
   | Error (`Msg e) -> failwith e
 
 let with_temp_dir f =
+  let old_cwd = Sys.getcwd () in
   let path = Filename.temp_file "ditz-test-" "" in
   Sys.remove path;
   Unix.mkdir path 0o700;
   let cleanup () =
+    Sys.chdir old_cwd;
     if Sys.file_exists path then begin
       Sys.readdir path
       |> Array.iter (fun name -> Sys.remove (Filename.concat path name));
@@ -38,6 +40,8 @@ let with_temp_dir f =
     end
   in
   try
+    (* Change to temp dir so we're not in a git repo *)
+    Sys.chdir path;
     let result = f path in
     cleanup ();
     result

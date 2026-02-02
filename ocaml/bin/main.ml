@@ -922,6 +922,42 @@ let status_cmd =
   in
   Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
 
+let sync_cmd =
+  let doc = "Sync ditz-metadata with remote (fetch, merge, push)" in
+  let info = Cmd.info "sync" ~doc in
+  let pull_only = Arg.(value & flag & info ["pull-only"] ~doc:"Only fetch and merge, don't push") in
+  let push_only = Arg.(value & flag & info ["push-only"] ~doc:"Only push, don't fetch or merge") in
+  let run pull_only push_only () =
+    if not (Ditz.Git.is_git_repo ()) then begin
+      Fmt.epr "Error: not in a git repository@."; 1
+    end else if not (Ditz.Git.ditz_metadata_exists ()) then begin
+      Fmt.epr "Error: ditz-metadata branch does not exist. Run 'ditz init' first.@."; 1
+    end else begin
+      match (pull_only, push_only) with
+      | (true, true) ->
+        Fmt.epr "Error: specify at most one of --pull-only, --push-only@."; 1
+      | (true, false) ->
+        (* Pull only: fetch and merge *)
+        (match Ditz.Git.fetch () with
+         | Error (`Msg e) -> Fmt.epr "Error fetching: %s@." e; 1
+         | Ok () ->
+           match Ditz.Git.merge () with
+           | Error (`Msg e) -> Fmt.epr "Error merging: %s@." e; 1
+           | Ok () -> Fmt.pr "Synced (pull only)@."; 0)
+      | (false, true) ->
+        (* Push only *)
+        (match Ditz.Git.push () with
+         | Error (`Msg e) -> Fmt.epr "Error pushing: %s@." e; 1
+         | Ok () -> Fmt.pr "Pushed ditz-metadata@."; 0)
+      | (false, false) ->
+        (* Full sync *)
+        (match Ditz.Git.sync () with
+         | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
+         | Ok () -> Fmt.pr "Synced ditz-metadata@."; 0)
+    end
+  in
+  Cmd.v info Term.(const run $ pull_only $ push_only $ setup_log_term)
+
 let main_cmd =
   let doc = "Distributed issue tracker" in
   let info = Cmd.info "ditz" ~version:"0.1.0-ocaml" ~doc in
@@ -945,6 +981,7 @@ let main_cmd =
     assign_cmd;
     unassign_cmd;
     status_cmd;
+    sync_cmd;
   ]
 
 let () = exit (Cmd.eval' main_cmd)
