@@ -40,11 +40,58 @@ let git ?(cwd = ".") args =
 let get_config key =
   git ["config"; key]
 
-(** Find the root of the git repository *)
+(** Find the root of the current worktree (varies per worktree) *)
 let find_git_root () =
   match git ["rev-parse"; "--show-toplevel"] with
   | Ok path -> Some path
   | Error _ -> None
+
+(** Find the shared .git directory (same for all worktrees).
+    git rev-parse --git-common-dir may return a relative path,
+    so we resolve it to absolute. *)
+let find_common_git_dir () =
+  match git ["rev-parse"; "--git-common-dir"] with
+  | Ok path ->
+    let abs_path =
+      if Filename.is_relative path then
+        Filename.concat (Sys.getcwd ()) path
+      else
+        path
+    in
+    (try Some (Unix.realpath abs_path) with Unix.Unix_error _ -> Some abs_path)
+  | Error _ -> None
+
+(** Find the stable repo root that's the same from every worktree.
+    This is Filename.dirname of the common git dir. *)
+let find_common_root () =
+  match find_common_git_dir () with
+  | Some dir -> Some (Filename.dirname dir)
+  | None -> None
+
+(** Parse `git worktree list --porcelain` to find an existing worktree
+    checked out on the ditz-metadata branch. Returns Some path or None. *)
+let find_existing_ditz_worktree () =
+  match git ["worktree"; "list"; "--porcelain"] with
+  | Error _ -> None
+  | Ok output ->
+    let lines = String.split_on_char '\n' output in
+    let target_branch = "branch refs/heads/" ^ ditz_branch in
+    let rec scan current_path = function
+      | [] -> None
+      | line :: rest ->
+        let trimmed = String.trim line in
+        if String.length trimmed >= 9 && String.sub trimmed 0 9 = "worktree " then
+          let path = String.sub trimmed 9 (String.length trimmed - 9) in
+          scan (Some path) rest
+        else if trimmed = target_branch then
+          current_path
+        else if trimmed = "" then
+          (* blank line separates worktree entries — reset *)
+          scan None rest
+        else
+          scan current_path rest
+    in
+    scan None lines
 
 (** Check if we're in a git repository *)
 let is_git_repo () =
@@ -63,11 +110,16 @@ let branch_exists ?(remote = false) branch =
 let ditz_metadata_exists () =
   branch_exists ditz_branch || branch_exists ~remote:true ditz_branch
 
-(** Get path to persistent worktree *)
+(** Get path to persistent worktree.
+    First checks for an existing ditz-metadata worktree (via git worktree list),
+    then falls back to <common-root>/.ditz-worktree. *)
 let persistent_worktree_path () =
-  match find_git_root () with
-  | Some root -> Some (Filename.concat root worktree_dir)
-  | None -> None
+  match find_existing_ditz_worktree () with
+  | Some path -> Some path
+  | None ->
+    match find_common_root () with
+    | Some root -> Some (Filename.concat root worktree_dir)
+    | None -> None
 
 (** Check if persistent worktree exists and is valid *)
 let persistent_worktree_valid () =
