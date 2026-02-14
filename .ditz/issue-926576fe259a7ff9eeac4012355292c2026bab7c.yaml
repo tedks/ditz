@@ -1,0 +1,18 @@
+id: 926576fe259a7ff9eeac4012355292c2026bab7c
+title: Use typed error variants instead of polymorphic Msg
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-14T21:09:40-00:00
+references: []
+log_events:
+- time: 2026-02-14T21:09:40-00:00
+  who: Test User
+  what: created
+  comment: ""
