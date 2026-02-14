@@ -1,0 +1,18 @@
+id: 6a4d3eca9c991f181c7e8c849e215e5f052ab568
+title: Silent fallback to epoch time in now_rfc3339 hides failures
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-14T21:09:35-00:00
+references: []
+log_events:
+- time: 2026-02-14T21:09:35-00:00
+  who: Test User
+  what: created
+  comment: ""
