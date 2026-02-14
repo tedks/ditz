@@ -1,0 +1,18 @@
+id: 40c2501535e81690271d1853603902dd72e17d7c
+title: 'DATA: Non-atomic writes can corrupt files on crash'
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-14T21:09:33-00:00
+references: []
+log_events:
+- time: 2026-02-14T21:09:33-00:00
+  who: Test User
+  what: created
+  comment: ""
