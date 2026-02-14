@@ -1,0 +1,18 @@
+id: 09f5659bf373c0b004bdc841237e3a487f42cb97
+title: 'SECURITY: Symlink attack via open_out following symlinks'
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-14T21:09:24-00:00
+references: []
+log_events:
+- time: 2026-02-14T21:09:24-00:00
+  who: Test User
+  what: created
+  comment: ""
