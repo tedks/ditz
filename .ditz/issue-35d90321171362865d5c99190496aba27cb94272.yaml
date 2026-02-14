@@ -1,0 +1,18 @@
+id: 35d90321171362865d5c99190496aba27cb94272
+title: 'Resource leak: read_yaml_file does not close file on exception'
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Test User <test@example.com>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-02-14T21:09:31-00:00
+references: []
+log_events:
+- time: 2026-02-14T21:09:31-00:00
+  who: Test User
+  what: created
+  comment: ""
