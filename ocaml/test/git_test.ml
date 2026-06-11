@@ -328,6 +328,108 @@ let test_write_from_external_worktree () =
   );
   Printf.printf "PASS: write_from_external_worktree\n"
 
+(** Build a bare-at-root layout like ~/Projects/<proj>: the project directory
+    IS the bare git dir, with worktrees nested inside it. *)
+let make_bare_at_root_layout prefix =
+  let seed = make_temp_dir (prefix ^ "_seed") in
+  init_git_repo seed;
+  let bare = make_temp_dir (prefix ^ "_bare") in
+  rm_rf bare;
+  run_in ~cwd:"/tmp" (Printf.sprintf "git clone --bare %s %s"
+    (Filename.quote seed) (Filename.quote bare));
+  run_in ~cwd:bare "git config user.email 'test@example.com'";
+  run_in ~cwd:bare "git config user.name 'Test'";
+  let main = Filename.concat bare "main" in
+  run_in ~cwd:bare (Printf.sprintf "git worktree add %s" (Filename.quote main));
+  rm_rf seed;
+  (bare, main)
+
+let test_bare_at_root_layout () =
+  let (bare, main) = make_bare_at_root_layout "ditz_bare" in
+  let old_cwd = Sys.getcwd () in
+  (try
+    Sys.chdir main;
+    (* The container must be the bare dir itself, never its parent — the
+       parent is shared with unrelated sibling projects *)
+    (match Git.find_common_root () with
+     | Some root -> assert (root = bare)
+     | None -> failwith "Expected common root in bare-at-root layout");
+    (match Git.persistent_worktree_path () with
+     | Some p -> assert (p = Filename.concat bare ".ditz-worktree")
+     | None -> failwith "Expected persistent worktree path");
+    (* init from the bare root itself must not crash *)
+    Sys.chdir bare;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"bareproj") in
+    assert (Git.ditz_metadata_exists ());
+    (* end-to-end write from the nested worktree, then list *)
+    Sys.chdir main;
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-bare1.yaml"
+      ~content:"id: bare1\ntitle: bare layout\n"
+      ~commit_msg:"test bare layout") in
+    let files = Git.list_ditz_files () in
+    assert (List.exists (fun f -> Filename.basename f = "issue-bare1.yaml") files);
+    Sys.chdir old_cwd;
+    rm_rf bare
+  with e -> Sys.chdir old_cwd; rm_rf bare; raise e);
+  Printf.printf "PASS: bare_at_root_layout\n"
+
+let test_foreign_worktree_rejected () =
+  (* Repo A's ditz worktree sitting at repo B's canonical path must NOT be
+     accepted by B — accepting it would send B's issue writes into A's
+     tracker (reported success, wrong repository). *)
+  let a = make_temp_dir "ditz_owner_a" in
+  let b = make_temp_dir "ditz_owner_b" in
+  let old_cwd = Sys.getcwd () in
+  (try
+    init_git_repo a;
+    init_git_repo b;
+    Sys.chdir a;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"A") in
+    let foreign = Filename.concat b ".ditz-worktree" in
+    run_in ~cwd:a (Printf.sprintf "git worktree add %s ditz-metadata"
+      (Filename.quote foreign));
+    Sys.chdir b;
+    assert (not (Git.persistent_worktree_valid ()));
+    (* Creation must refuse loudly rather than adopt the foreign worktree *)
+    assert_error (Git.create_persistent_worktree ());
+    Sys.chdir old_cwd;
+    rm_rf a; rm_rf b
+  with e -> Sys.chdir old_cwd; rm_rf a; rm_rf b; raise e);
+  Printf.printf "PASS: foreign_worktree_rejected\n"
+
+let test_list_from_subdirectory () =
+  with_temp_git_repo (fun temp_dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sub1.yaml"
+      ~content:"id: sub1\ntitle: from subdir\n"
+      ~commit_msg:"test subdir") in
+    let sub = Filename.concat temp_dir "src" in
+    Unix.mkdir sub 0o755;
+    Sys.chdir sub;
+    (* The old pathspec form resolved ".ditz/" relative to the cwd and
+       silently returned [] from any subdirectory *)
+    let files = Git.list_ditz_files () in
+    assert (List.exists (fun f -> Filename.basename f = "issue-sub1.yaml") files);
+    Sys.chdir temp_dir
+  );
+  Printf.printf "PASS: list_from_subdirectory\n"
+
+let test_stale_worktree_self_heal () =
+  with_temp_git_repo (fun temp_dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
+    let path = assert_ok (Git.create_persistent_worktree ()) in
+    (* Simulate manual deletion: the directory goes away but git's worktree
+       registration survives, which used to wedge every later write on
+       "missing but already registered worktree" *)
+    rm_rf path;
+    assert (Git.find_existing_ditz_worktree () = None);
+    let path2 = assert_ok (Git.create_persistent_worktree ()) in
+    assert (path2 = Filename.concat temp_dir ".ditz-worktree")
+  );
+  Printf.printf "PASS: stale_worktree_self_heal\n"
+
 let test_storage_git_backend () =
   with_temp_git_repo (fun _ ->
     (* Initialize via storage module *)
@@ -389,5 +491,9 @@ let () =
   test_persistent_worktree_from_external_worktree ();
   test_persistent_worktree_from_inside_ditz_worktree ();
   test_write_from_external_worktree ();
+  test_bare_at_root_layout ();
+  test_foreign_worktree_rejected ();
+  test_list_from_subdirectory ();
+  test_stale_worktree_self_heal ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

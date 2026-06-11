@@ -61,37 +61,69 @@ let find_common_git_dir () =
     (try Some (Unix.realpath abs_path) with Unix.Unix_error _ -> Some abs_path)
   | Error _ -> None
 
-(** Find the stable repo root that's the same from every worktree.
-    This is Filename.dirname of the common git dir. *)
+(** Find the stable container directory that's the same from every worktree.
+    For a normal repo the common git dir is <root>/.git, so the container is
+    its parent. For a bare repo the common git dir IS the repo — using its
+    parent would place .ditz-worktree outside the repository, shared with (and
+    corrupted by) any sibling bare repo under the same parent directory. *)
 let find_common_root () =
   match find_common_git_dir () with
-  | Some dir -> Some (Filename.dirname dir)
+  | Some dir ->
+    if Filename.basename dir = ".git" then Some (Filename.dirname dir)
+    else Some dir
   | None -> None
 
 (** Parse `git worktree list --porcelain` to find an existing worktree
-    checked out on the ditz-metadata branch. Returns Some path or None. *)
+    checked out on the ditz-metadata branch. Returns Some path or None.
+    Entries whose directory was deleted out from under git ("prunable") are
+    skipped — returning one would wedge every write until a manual
+    `git worktree prune` — and if only stale registrations exist we prune
+    them so a fresh worktree can be created at the canonical path. *)
 let find_existing_ditz_worktree () =
   match git ["worktree"; "list"; "--porcelain"] with
   | Error _ -> None
   | Ok output ->
-    let lines = String.split_on_char '\n' output in
     let target_branch = "branch refs/heads/" ^ ditz_branch in
-    let rec scan current_path = function
-      | [] -> None
-      | line :: rest ->
-        let trimmed = String.trim line in
-        if String.length trimmed >= 9 && String.sub trimmed 0 9 = "worktree " then
-          let path = String.sub trimmed 9 (String.length trimmed - 9) in
-          scan (Some path) rest
-        else if trimmed = target_branch then
-          current_path
-        else if trimmed = "" then
-          (* blank line separates worktree entries — reset *)
-          scan None rest
-        else
-          scan current_path rest
+    (* Group lines into per-worktree entries (separated by blank lines) *)
+    let entries =
+      String.split_on_char '\n' output
+      |> List.map String.trim
+      |> List.fold_left (fun groups line ->
+          match groups with
+          | _ when line = "" -> [] :: groups
+          | [] -> [[line]]
+          | cur :: rest -> (line :: cur) :: rest)
+        []
+      |> List.map List.rev
     in
-    scan None lines
+    let prefixed prefix l =
+      String.length l >= String.length prefix
+      && String.sub l 0 (String.length prefix) = prefix
+    in
+    let candidates =
+      List.filter_map (fun entry ->
+        if List.mem target_branch entry then
+          let path =
+            List.find_map (fun l ->
+              if prefixed "worktree " l then
+                Some (String.sub l 9 (String.length l - 9))
+              else None)
+              entry
+          in
+          let prunable =
+            List.exists (fun l -> l = "prunable" || prefixed "prunable " l) entry
+          in
+          Option.map (fun p -> (p, prunable)) path
+        else None)
+        entries
+    in
+    match
+      List.find_opt (fun (p, prunable) -> not prunable && Sys.file_exists p) candidates
+    with
+    | Some (path, _) -> Some path
+    | None ->
+      if candidates <> [] then ignore (git ["worktree"; "prune"]);
+      None
 
 (** Check if we're in a git repository *)
 let is_git_repo () =
@@ -121,16 +153,27 @@ let persistent_worktree_path () =
     | Some root -> Some (Filename.concat root worktree_dir)
     | None -> None
 
-(** Check if persistent worktree exists and is valid *)
+(** Check if persistent worktree exists and is valid: on the ditz-metadata
+    branch AND belonging to THIS repository. The ownership check matters: a
+    directory that is some other repo's ditz worktree would otherwise pass,
+    and writes would land in that other project's tracker. *)
 let persistent_worktree_valid () =
   match persistent_worktree_path () with
   | None -> false
   | Some path ->
-    Sys.file_exists path && Sys.is_directory path &&
-    (* Check it's actually a worktree for ditz-metadata *)
-    match git ~cwd:path ["rev-parse"; "--abbrev-ref"; "HEAD"] with
-    | Ok branch -> String.trim branch = ditz_branch
-    | Error _ -> false
+    Sys.file_exists path && Sys.is_directory path
+    && (match git ~cwd:path ["rev-parse"; "--abbrev-ref"; "HEAD"] with
+        | Ok branch -> String.trim branch = ditz_branch
+        | Error _ -> false)
+    && (match git ~cwd:path ["rev-parse"; "--git-common-dir"], find_common_git_dir () with
+        | Ok wt_common, Some our_common ->
+          let abs =
+            if Filename.is_relative wt_common then Filename.concat path wt_common
+            else wt_common
+          in
+          let resolved = (try Unix.realpath abs with Unix.Unix_error _ -> abs) in
+          resolved = our_common
+        | _ -> false)
 
 (** Create persistent worktree with sparse checkout *)
 let create_persistent_worktree () =
@@ -191,11 +234,10 @@ let with_worktree f =
 
 (** Create the ditz-metadata orphan branch with initial project structure *)
 let create_ditz_metadata_branch ~project_name =
-  (* Create orphan branch using git worktree *)
-  let _git_root = match find_git_root () with
-    | Some _ -> ()
-    | None -> failwith "Not in a git repository"
-  in
+  (* find_git_root requires a work tree and so is false at a bare repo root;
+     is_git_repo holds anywhere inside the repository. Error, never failwith. *)
+  if not (is_git_repo ()) then Error (`Msg "Not in a git repository")
+  else
   let temp_dir = Filename.temp_file "ditz_init" "" in
   Sys.remove temp_dir;
 
@@ -247,12 +289,18 @@ let read_file_from_branch path =
   let ref_path = ditz_branch ^ ":" ^ path in
   git ["show"; ref_path]
 
-(** List files in .ditz directory on ditz-metadata branch *)
+(** List files in .ditz directory on ditz-metadata branch.
+    --full-tree is load-bearing: ls-tree implicitly limits output to the
+    cwd-derived prefix, so without it this silently returns [] (exit 0)
+    when run from any subdirectory of a worktree. *)
 let list_ditz_files () =
-  match git ["ls-tree"; "--name-only"; ditz_branch; ".ditz/"] with
+  match git ["ls-tree"; "--full-tree"; "--name-only"; ditz_branch ^ ":.ditz"] with
   | Ok output ->
     if output = "" then []
-    else String.split_on_char '\n' output
+    else
+      String.split_on_char '\n' output
+      |> List.filter (fun l -> String.trim l <> "")
+      |> List.map (fun name -> ".ditz/" ^ String.trim name)
   | Error _ -> []
 
 (** Write content to a file on ditz-metadata branch using worktree *)
