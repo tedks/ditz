@@ -8,7 +8,8 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 
 ## Mission (revised 2026-06-11): replace beads
 
-The rewrite (Phases 1, 5, 6) shipped and ditz tracks its own issues. The goal now is
+The rewrite (Phases 1, 5, 6) substantially shipped (`edit` and the
+release-management commands remain) and ditz tracks its own issues. The goal now is
 sharper than "rewrite ditz": **be a drop-in replacement for beads in tedks' real
 workflows**, with none of beads' daemon/sqlite/sync complexity.
 
@@ -40,22 +41,29 @@ files + git, not a better daemon.
    deps + tree view, comments, JSON everywhere.
 3. **No known data-loss paths**: atomic writes on both backends, conflict-safe sync.
 4. **CI green on every PR** (currently there is no CI at all).
-5. **One real project migrated off beads** (candidate: predictionbook, then goals)
-   and used daily by agents for a week without manual repair.
+5. **One real project migrated off beads**: predictionbook, used daily by agents
+   for a week without manual repair, gates 0.1.0; goals migrates after the tag.
 
 ### Roadmap (sequenced)
 
 Each step is roughly one focused session; steps 1–2 can be a stacked-PR chain.
 
-- **Step 0 — Unblockers**: merge PR #4 (worktree root detection); identity fallback
-  to git config (kills the init↔config chicken-and-egg AND the "Test User" data
-  pollution); CI via the nix flake; tracker cleanup (purge `issue-abc123`/`abc999`
-  test artifacts, re-file the 3 unparseable hand-written phase issues, close the
-  2 already-fixed review issues). Everything later writes issue data and lands PRs,
-  so identity + CI come first.
-- **Step 1 — Data safety** (Phase 8.2–8.3): atomic git-backend writes, read leak,
-  epoch fallback, then sync conflict auto-resolution. Before parity work pulls more
-  usage (and before migration imports real data) the write path must be trustworthy.
+- **Step 0 — Unblockers**: merge PR #4 (worktree root detection — including the
+  bare-at-root container fix, worktree ownership check, and cwd-independent
+  listing from the 2026-06-11 council review); identity fallback to git config
+  (PR #7 — kills the init↔config chicken-and-egg AND the "Test User" data
+  pollution); CI via the nix flake (PR #6, merged). Everything later writes
+  issue data and lands PRs, so identity + CI come first.
+- **Step 1 — Data safety** (Phase 8.2–8.3, then 8.7): atomic git-backend writes,
+  read leak, epoch fallback, then sync conflict auto-resolution, THEN tracker
+  cleanup (purge `issue-abc123`/`abc999` test artifacts, re-file the 3
+  unparseable hand-written phase issues, close the 2 already-fixed review
+  issues) — cleanup rewrites live tracker data, so it waits for the trustworthy
+  write path. Before parity work pulls more usage (and before migration imports
+  real data) the write path must be trustworthy.
+- Step ownership, to keep sessions from colliding: 7.1, 8.1, 8.4 execute in
+  Step 0; 8.7 in Step 1; 8.5 rides with 8.4's CI; 8.6 folds into Step 2's type
+  changes. Step 2 then covers 7.0 and 7.2–7.7.
 - **Step 2 — Parity core** (Phase 7.0–7.7): clean YAML scalars; creation flags +
   priority field + `close --reason` + `set --status`; prefixed short IDs;
   parent/epic. This is ~90% of the observed muscle memory.
@@ -448,6 +456,12 @@ git worktree remove $temp_dir
 
 Or use git's index directly without a worktree checkout (faster, more complex).
 
+> **SUPERSEDED 2026-06-11.** The pseudocode above describes the original
+> ephemeral per-command worktree. What shipped (c05f559) is a persistent sparse
+> worktree at `<container>/.ditz-worktree`, reused across commands
+> (`DITZ_EPHEMERAL_WORKTREE=1` keeps the old behavior). Don't re-implement the
+> pseudocode.
+
 ## Phase 7: Beads Parity
 
 Ordered by observed usage frequency. 7.0–7.7 are the "90% of muscle memory" tier.
@@ -462,18 +476,30 @@ human-obvious format becomes THE format. Do this FIRST: every other 7.x adds fie
 and they should land in the stable representation.
 
 ### 7.1 Identity without config
-- [ ] Reporter = `~/.ditz-config` if present, else `git config user.name/email`,
-      else `$DITZ_USER`/`$DITZ_EMAIL`, else error with a real fix-it message
+- [ ] Reporter = `~/.ditz-config` if present, else `$DITZ_USER`/`$DITZ_EMAIL`
+      (explicit beats inferred), else `git config user.name/email`, else error
+      with a real fix-it message (PR #7)
 - [ ] `ditz init` no longer claims config exists when it doesn't
+- [ ] `init` derives the project name from `basename(cwd)`, which in worktree
+      layouts yields names like "master" — add `init --name` and default to the
+      common-root basename
 
-### 7.2 Short prefixed IDs (beads' `proj-42` style)
+### 7.2 Short prefixed random IDs (`proj-a3f2k` style)
 - [ ] `ditz init --prefix foo` stores prefix in project.yaml
-- [ ] New issues get `foo-N`, N = max existing + 1 read from the metadata branch
-- [ ] Full SHA1 and `--id custom` still accepted; prefix matching already works
-- Design note: all writes serialize through the single shared metadata worktree, so
-  same-clone races are narrow; two offline clones CAN mint the same N — sync
-  surfaces it as a file conflict and the resolution is renumbering the younger
-  issue. Document it; don't build a coordination service.
+- [ ] New issues get `foo-` + 5 random base36 chars, rerolled against the local
+      tree on the (rare) collision at create time — a purely local check, no
+      coordination
+- [ ] Full SHA1 and `--id custom` still accepted (idempotent creates depend on
+      `--id`); prefix matching already works
+- Design note (2026-06-11, council review): sequential `proj-N` was REJECTED.
+  (a) Nothing serializes concurrent ditz processes in one clone — two
+  simultaneous `ditz add` could mint the same N and truncate-overwrite each
+  other before commit. (b) Renumber-on-sync silently re-points existing
+  references (commit messages, agent context, blocked_by) at a different
+  issue — the worst failure mode for agents holding an ID mid-task.
+  (c) The consumers are agents copying IDs out of --json; sequence carries no
+  value for them, and creation order is already in creation_time.
+  Random suffixes make all three hazards structurally impossible.
 
 ### 7.3 Creation-time metadata (beads: `-t` 84%, `--priority` 40%, `--parent` 19%)
 - [ ] `add -t|--type bugfix|feature|task`, `-c|--component`, `-p|--priority`,
@@ -517,7 +543,10 @@ and they should land in the stable representation.
 
 ### 8.1 Land PR #4
 Worktree/root detection fix — required for bare-repo + worktree layouts (i.e. how
-tedks actually uses git). Open since 2026-02-14; finish its manual smoke test.
+tedks actually uses git). Council review (2026-06-11) found and fixed in-PR: the
+bare-at-root container derivation (silent cross-project writes), the worktree
+ownership check, stale-registration self-heal, init-from-bare-root crash, and
+cwd-dependent empty `list` from subdirectories. Smoke test done on the real layout.
 
 ### 8.2 Write-path integrity (from the 2026-02-14 review, still valid)
 - [ ] Git backend writes through the same temp-file + rename helper as FS backend
@@ -528,14 +557,17 @@ tedks actually uses git). Open since 2026-02-14; finish its manual smoke test.
 ### 8.3 Sync conflict auto-resolution
 Implement the Phase 6 spec that's currently a TODO (git.ml `merge`): union
 log_events, last-write-wins status by timestamp, union references;
-`.ditz-conflict/` escape hatch when titles/descs diverge.
+`.ditz-conflict/` escape hatch when titles/descs diverge. With random IDs
+(7.2) the only same-path conflict class is two edits of the same issue, which
+this spec covers — settle the ID format before or with this work. Resolution
+must always emit parseable YAML.
 
 ### 8.4 CI
 GitHub Actions: nix-based `dune build` + `dune runtest` on every PR
 (flake + cache action; the opam-nix toolchain must not cold-build per run).
 There is currently NO CI — PR #1–4 were merged on local test claims.
 
-### 8.5 Test isolation
+### 8.5 Test isolation (rides with 8.4's CI)
 Tests must never read/write the real `$HOME` or real config — the live tracker's
 "Test User <test@example.com>" reporter on every issue is the scar tissue here.
 
@@ -625,9 +657,11 @@ Target: single static binary that can be dropped anywhere.
 ## Open Questions
 
 1. **Issue ID format**: ~~Keep SHA1 hashes or switch to shorter IDs?~~
-   **RESOLVED 2026-06-11**: prefixed sequential (`proj-42`, Phase 7.2) — beads
-   trained the muscle memory and short IDs appear in every observed command.
-   SHA1 and `--id custom` remain accepted.
+   **RESOLVED 2026-06-11**: prefixed short RANDOM (`proj-a3f2k`, Phase 7.2).
+   Short + prefixed is what the beads muscle memory actually values;
+   sequentiality was rejected by council review (concurrent same-clone minting
+   races, renumber-on-sync re-pointing live references). SHA1 and `--id custom`
+   remain accepted.
 
 2. **Config location**: ~~`~/.ditz-config` or `~/.config/ditz/config.yaml`?~~
    **RESOLVED 2026-06-11**: mostly moot — identity comes from `git config` with
