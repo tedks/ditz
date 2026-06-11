@@ -430,6 +430,32 @@ let test_stale_worktree_self_heal () =
   );
   Printf.printf "PASS: stale_worktree_self_heal\n"
 
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
+  go 0
+
+let test_self_heal_spares_other_worktrees () =
+  with_temp_git_repo (fun temp_dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
+    let ditz_wt = assert_ok (Git.create_persistent_worktree ()) in
+    (* A user worktree whose directory has gone missing (e.g. mv'd away):
+       prunable in porcelain but REPAIRABLE — the self-heal must not take it *)
+    let user_wt = Filename.concat temp_dir "user-feature" in
+    run_in ~cwd:temp_dir
+      (Printf.sprintf "git worktree add -b user-feature %s" (Filename.quote user_wt));
+    rm_rf user_wt;
+    rm_rf ditz_wt;
+    assert (Git.find_existing_ditz_worktree () = None);
+    (match Git.git ["worktree"; "list"; "--porcelain"] with
+     | Ok out ->
+       (* ditz's stale registration healed; the user's survived *)
+       assert (not (contains out ".ditz-worktree"));
+       assert (contains out "user-feature")
+     | Error (`Msg e) -> failwith e)
+  );
+  Printf.printf "PASS: self_heal_spares_other_worktrees\n"
+
 let test_storage_git_backend () =
   with_temp_git_repo (fun _ ->
     (* Initialize via storage module *)
@@ -495,5 +521,6 @@ let () =
   test_foreign_worktree_rejected ();
   test_list_from_subdirectory ();
   test_stale_worktree_self_heal ();
+  test_self_heal_spares_other_worktrees ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

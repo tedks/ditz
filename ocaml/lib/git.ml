@@ -9,9 +9,15 @@ let use_ephemeral_worktree () =
   | Some "1" | Some "true" -> true
   | _ -> false
 
-(** Run a git command and return stdout, stderr, and exit code *)
-let run_git_command ?(cwd = ".") args =
-  let cmd = String.concat " " ("git" :: List.map Filename.quote args) in
+(** Run a git command and return stdout, stderr, and exit code.
+    ignore_repo_env strips GIT_DIR/GIT_WORK_TREE so the command describes the
+    repository at cwd, not whatever the environment points at — required when
+    inspecting a candidate directory rather than operating on "our" repo. *)
+let run_git_command ?(cwd = ".") ?(ignore_repo_env = false) args =
+  let base = String.concat " " ("git" :: List.map Filename.quote args) in
+  let cmd =
+    if ignore_repo_env then "env -u GIT_DIR -u GIT_WORK_TREE " ^ base else base
+  in
   let stdout_file = Filename.temp_file "ditz_git_stdout" ".txt" in
   let stderr_file = Filename.temp_file "ditz_git_stderr" ".txt" in
   let full_cmd = Printf.sprintf "cd %s && %s > %s 2> %s"
@@ -31,8 +37,8 @@ let run_git_command ?(cwd = ".") args =
   (stdout_content, stderr_content, exit_code)
 
 (** Run git command and return Ok stdout or Error stderr *)
-let git ?(cwd = ".") args =
-  let (stdout, stderr, code) = run_git_command ~cwd args in
+let git ?(cwd = ".") ?(ignore_repo_env = false) args =
+  let (stdout, stderr, code) = run_git_command ~cwd ~ignore_repo_env args in
   if code = 0 then Ok stdout
   else Error (`Msg (Printf.sprintf "git %s failed: %s" (String.concat " " args) stderr))
 
@@ -65,7 +71,11 @@ let find_common_git_dir () =
     For a normal repo the common git dir is <root>/.git, so the container is
     its parent. For a bare repo the common git dir IS the repo — using its
     parent would place .ditz-worktree outside the repository, shared with (and
-    corrupted by) any sibling bare repo under the same parent directory. *)
+    corrupted by) any sibling bare repo under the same parent directory.
+    Known blind spot: inside a submodule the common dir is
+    <super>/.git/modules/<name>, so the container lands inside the
+    superproject's git dir — repo-unique (safe from cross-talk) but removed
+    wholesale by `git submodule deinit`. Tracked as a follow-up issue. *)
 let find_common_root () =
   match find_common_git_dir () with
   | Some dir ->
@@ -77,8 +87,11 @@ let find_common_root () =
     checked out on the ditz-metadata branch. Returns Some path or None.
     Entries whose directory was deleted out from under git ("prunable") are
     skipped — returning one would wedge every write until a manual
-    `git worktree prune` — and if only stale registrations exist we prune
-    them so a fresh worktree can be created at the canonical path. *)
+    `git worktree prune`. Stale ditz registrations are removed SURGICALLY
+    (`git worktree remove --force <path>`), never via a global prune: a
+    global prune would also destroy unrelated registrations that are merely
+    unreachable right now (a worktree the user mv'd and could repair, or one
+    on unmounted storage), and that loss is unrecoverable. *)
 let find_existing_ditz_worktree () =
   match git ["worktree"; "list"; "--porcelain"] with
   | Error _ -> None
@@ -100,29 +113,45 @@ let find_existing_ditz_worktree () =
       String.length l >= String.length prefix
       && String.sub l 0 (String.length prefix) = prefix
     in
-    let candidates =
+    let parsed =
       List.filter_map (fun entry ->
-        if List.mem target_branch entry then
-          let path =
-            List.find_map (fun l ->
-              if prefixed "worktree " l then
-                Some (String.sub l 9 (String.length l - 9))
-              else None)
-              entry
-          in
-          let prunable =
-            List.exists (fun l -> l = "prunable" || prefixed "prunable " l) entry
-          in
-          Option.map (fun p -> (p, prunable)) path
-        else None)
+        let path =
+          List.find_map (fun l ->
+            if prefixed "worktree " l then
+              Some (String.sub l 9 (String.length l - 9))
+            else None)
+            entry
+        in
+        let on_target = List.mem target_branch entry in
+        let prunable =
+          List.exists (fun l -> l = "prunable" || prefixed "prunable " l) entry
+        in
+        Option.map (fun p -> (p, on_target, prunable)) path)
         entries
+    in
+    let candidates =
+      List.filter_map
+        (fun (p, on_target, prunable) -> if on_target then Some (p, prunable) else None)
+        parsed
     in
     match
       List.find_opt (fun (p, prunable) -> not prunable && Sys.file_exists p) candidates
     with
     | Some (path, _) -> Some path
     | None ->
-      if candidates <> [] then ignore (git ["worktree"; "prune"]);
+      let other_prunable =
+        List.exists (fun (_, on_target, prunable) -> (not on_target) && prunable) parsed
+      in
+      List.iter
+        (fun (p, _) ->
+          match git ["worktree"; "remove"; "--force"; p] with
+          | Ok _ -> ()
+          | Error _ ->
+            (* Older git may refuse to remove a missing-dir registration.
+               Global prune is a last resort, and only when it cannot take
+               anyone else's registration with it. *)
+            if not other_prunable then ignore (git ["worktree"; "prune"]))
+        candidates;
       None
 
 (** Check if we're in a git repository *)
@@ -162,10 +191,10 @@ let persistent_worktree_valid () =
   | None -> false
   | Some path ->
     Sys.file_exists path && Sys.is_directory path
-    && (match git ~cwd:path ["rev-parse"; "--abbrev-ref"; "HEAD"] with
+    && (match git ~cwd:path ~ignore_repo_env:true ["rev-parse"; "--abbrev-ref"; "HEAD"] with
         | Ok branch -> String.trim branch = ditz_branch
         | Error _ -> false)
-    && (match git ~cwd:path ["rev-parse"; "--git-common-dir"], find_common_git_dir () with
+    && (match git ~cwd:path ~ignore_repo_env:true ["rev-parse"; "--git-common-dir"], find_common_git_dir () with
         | Ok wt_common, Some our_common ->
           let abs =
             if Filename.is_relative wt_common then Filename.concat path wt_common
