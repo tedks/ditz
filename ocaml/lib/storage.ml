@@ -218,14 +218,35 @@ end
 
 (* Public API - dispatches to appropriate backend *)
 
+(** Identity fallback when no config file exists:
+    DITZ_USER/DITZ_EMAIL env vars take precedence (explicit beats inferred),
+    then git config user.name/user.email. *)
+let identity_fallback () =
+  let nonempty s = match String.trim s with "" -> None | t -> Some t in
+  let from_git key =
+    match Git.get_config key with
+    | Ok v -> nonempty v
+    | Error _ -> None
+  in
+  let lookup env_var git_key =
+    match Option.bind (Sys.getenv_opt env_var) nonempty with
+    | Some v -> Some v
+    | None -> from_git git_key
+  in
+  match lookup "DITZ_USER" "user.name", lookup "DITZ_EMAIL" "user.email" with
+  | Some name, Some email -> Ok { name; email; issue_dir = default_issue_dir }
+  | _ ->
+    Error (`Msg
+      "No identity found. Set git config user.name and user.email, \
+       or DITZ_USER and DITZ_EMAIL, or create ~/.ditz-config.")
+
 let load_config () =
   match config_file () with
-  | Error _ as e -> e
-  | Ok path ->
-    if Sys.file_exists path then
-      FS.read_yaml_file config_of_yaml path
-    else
-      Error (`Msg "No config found. Run 'ditz init' first.")
+  | Ok path when Sys.file_exists path ->
+    FS.read_yaml_file config_of_yaml path
+  | Ok _ | Error _ ->
+    (* No config file (or no HOME at all): fall back to git/env identity *)
+    identity_fallback ()
 
 let save_config config =
   match config_file () with

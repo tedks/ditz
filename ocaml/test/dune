@@ -33,3 +33,7 @@
 (test
  (name git_test)
  (libraries ditz unix))
+
+(test
+ (name config_test)
+ (libraries ditz unix))
