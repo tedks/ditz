@@ -11,10 +11,20 @@ let make_temp_dir prefix =
   Unix.mkdir path 0o700;
   path
 
+let rm_rf path =
+  ignore (Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote path)))
+
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
+  go 0
+
 let () =
   let original_cwd = Sys.getcwd () in
 
-  (* Isolate from the real environment: empty HOME, no global/system git config *)
+  (* Isolate from the real environment: empty HOME, no global/system git config.
+     putenv "" (not unset) suffices for DITZ_* only because the resolver treats
+     blank-after-trim as absent — that behavior is itself under test in case 3. *)
   let home = make_temp_dir "ditz_config_home" in
   Unix.putenv "HOME" home;
   Unix.putenv "GIT_CONFIG_GLOBAL" "/dev/null";
@@ -23,13 +33,16 @@ let () =
   Unix.putenv "DITZ_EMAIL" "";
 
   let repo = make_temp_dir "ditz_config_repo" in
+  let cleanup () = Sys.chdir original_cwd; rm_rf home; rm_rf repo in
+  at_exit cleanup;
   Sys.chdir repo;
   run "git init -q";
 
-  (* 1. Nothing available -> error mentioning the fix *)
+  (* 1. Nothing available -> error that says how to fix it *)
   (match Storage.load_config () with
    | Error (`Msg m) ->
-     assert (String.length m > 0)
+     assert (contains m "git config");
+     assert (contains m "DITZ_USER")
    | Ok _ -> failwith "expected error with no identity anywhere");
   Printf.printf "PASS: no identity -> error\n";
 
@@ -65,5 +78,4 @@ let () =
    | Error (`Msg m) -> failwith ("expected file identity, got error: " ^ m));
   Printf.printf "PASS: config file precedence\n";
 
-  Sys.chdir original_cwd;
   Printf.printf "\nAll config tests passed!\n"

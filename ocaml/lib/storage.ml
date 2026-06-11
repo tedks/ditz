@@ -220,7 +220,9 @@ end
 
 (** Identity fallback when no config file exists:
     DITZ_USER/DITZ_EMAIL env vars take precedence (explicit beats inferred),
-    then git config user.name/user.email. *)
+    then git config user.name/user.email. The two fields resolve
+    independently, so DITZ_USER may pair with a git-config email — deliberate,
+    so overriding one field doesn't force restating the other. *)
 let identity_fallback () =
   let nonempty s = match String.trim s with "" -> None | t -> Some t in
   let from_git key =
