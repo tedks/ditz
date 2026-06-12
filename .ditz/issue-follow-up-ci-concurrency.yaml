@@ -1,0 +1,18 @@
+id: follow-up-ci-concurrency
+title: 'CI: add concurrency group and job timeout-minutes to ci.yml'
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-06-12T00:07:35-00:00
+references: []
+log_events:
+- time: 2026-06-12T00:07:35-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
