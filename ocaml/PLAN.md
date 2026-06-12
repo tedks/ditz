@@ -6,6 +6,76 @@ Keep it simple. The original ditz was ~2200 lines of Ruby. We should be able to 
 
 The killer feature for the AI era: agents can read and write issues as plain text files.
 
+## Mission (revised 2026-06-11): replace beads
+
+The rewrite (Phases 1, 5, 6) substantially shipped (`edit` and the
+release-management commands remain) and ditz tracks its own issues. The goal now is
+sharper than "rewrite ditz": **be a drop-in replacement for beads in tedks' real
+workflows**, with none of beads' daemon/sqlite/sync complexity.
+
+Evidence base: analysis of every `bd` invocation in the Claude and Codex session
+histories on this machine (2026-06-11). The observed workflows, by frequency:
+
+1. The agent loop: `bd ready --json` → `bd update X --status in_progress` → work →
+   `bd close X --reason "..."` (dominant pattern in both histories)
+2. Typed creation: `bd create "title" -t task --priority 1 [--parent epic] [--json]`
+   (`-t` on ~84% of creates, `--priority` ~40%, `--parent` ~19%)
+3. `--reason` on 54–87% of closes
+4. JSON-everything piped to jq
+5. Constant `bd sync`
+6. `bd init --branch beads-metadata --prefix <proj>` → short IDs (`proj-42`) used in
+   every subsequent command
+7. Secondary: `comment`, `dep add`/`dep tree`/`graph`, `show --children`, `q`,
+   `list --parent/--label/--assignee/--limit`, `status`, `search`, `reopen`
+
+Explicitly NOT chasing: beads' daemon, `mol`/wisp/gate/swarm orchestration (Gas Town
+stays on beads), sqlite, merge drivers. ditz's answer to "sync complexity" is
+files + git, not a better daemon.
+
+### Definition of production-ready
+
+1. **Zero-config**: identity falls back to `git config user.name/email`;
+   `ditz init && ditz add "x"` works on a fresh machine with no `~/.ditz-config`.
+2. **Parity for the observed 90%**: typed/prioritized creation, generic status
+   update, close-with-reason, ready loop, short prefixed IDs, parent/epic,
+   deps + tree view, comments, JSON everywhere.
+3. **No known data-loss paths**: atomic writes on both backends, conflict-safe sync.
+4. **CI green on every PR** (currently there is no CI at all).
+5. **One real project migrated off beads**: predictionbook, used daily by agents
+   for a week without manual repair, gates 0.1.0; goals migrates after the tag.
+
+### Roadmap (sequenced)
+
+Each step is roughly one focused session; steps 1–2 can be a stacked-PR chain.
+
+- **Step 0 — Unblockers**: merge PR #4 (worktree root detection — including the
+  bare-at-root container fix, worktree ownership check, and cwd-independent
+  listing from the 2026-06-11 council review); identity fallback to git config
+  (PR #7 — kills the init↔config chicken-and-egg AND the "Test User" data
+  pollution); CI via the nix flake (PR #6, merged). Everything later writes
+  issue data and lands PRs, so identity + CI come first.
+- **Step 1 — Data safety** (Phase 8.2–8.3, then 8.7): atomic git-backend writes,
+  read leak, epoch fallback, then sync conflict auto-resolution, THEN tracker
+  cleanup (purge `issue-abc123`/`abc999` test artifacts, re-file the 3
+  unparseable hand-written phase issues, close the 2 already-fixed review
+  issues) — cleanup rewrites live tracker data, so it waits for the trustworthy
+  write path. Before parity work pulls more usage (and before migration imports
+  real data) the write path must be trustworthy.
+- Step ownership, to keep sessions from colliding: 7.1, 8.1, 8.4 execute in
+  Step 0; 8.7 in Step 1; 8.5 rides with 8.4's CI; 8.6 folds into Step 2's type
+  changes. Step 2 then covers 7.0 and 7.2–7.7.
+- **Step 2 — Parity core** (Phase 7.0, 7.2–7.7): clean YAML scalars; creation flags +
+  priority field + `close --reason` + `set --status`; prefixed short IDs;
+  parent/epic. This is ~90% of the observed muscle memory.
+- **Step 3 — Agent-loop polish** (Phase 7.8–7.11): `dep tree`, `reopen`, `count`,
+  `list --limit`, priority-sorted `ready`; labels/assignee if wanted.
+- **Step 4 — Migration & rollout** (Phase 9): beads JSONL import, distribution to
+  all machines, agent onboarding doc, migrate predictionbook and run it for a
+  week (this gates the tag).
+- **Step 5 — Tag 0.1.0**, then migrate goals and retire both projects' beads
+  daemons. Everything else (HTML export, Ruby compat beyond read-tolerance,
+  `doctor`, `stale`) stays in the backlog until it earns its place.
+
 ## Current State
 
 - [x] Project scaffolding (dune, opam deps)
@@ -66,6 +136,11 @@ The killer feature for the AI era: agents can read and write issues as plain tex
 
 ## Phase 2: Compatibility
 
+> **DESCOPED 2026-06-11.** Read-tolerance only: never crash on Ruby-ditz or
+> unknown-field YAML; skip with a warning (already the behavior). No write-back of
+> Ruby format. The field-mapping table below stays as reference for the beads/Ruby
+> importers (Phase 9.1). Issue naming is superseded by prefixed IDs (Phase 7.2).
+
 ### YAML Format
 The original Ruby ditz uses a YAML tag: `!ditz.rubyforge.org,2008-03-06/issue`
 
@@ -88,6 +163,11 @@ Original ditz assigns human-readable names like `#1`, `#2` or `component-1`, `co
 
 ## Phase 3: User Experience
 
+> **MOSTLY CUT 2026-06-11.** Interactive prompts are an anti-goal — the primary
+> users are agents (and a human who pipes). Status widgets already shipped. Color
+> and pagination stay in the backlog. Config commands are superseded by the
+> git-identity fallback (Phase 7.1).
+
 ### Interactive Mode
 - [ ] Interactive prompts for issue creation (type, component, release)
 - [ ] Multi-line description input via $EDITOR
@@ -105,6 +185,8 @@ Original ditz assigns human-readable names like `#1`, `#2` or `component-1`, `co
 - [ ] `ditz reconfigure` command
 
 ## Phase 4: Nice-to-Haves
+
+> **BACKLOG 2026-06-11.** Nothing here blocks beads replacement. Revisit after 0.1.0.
 
 ### Plugins (maybe)
 The Ruby version had a plugin system. Consider:
@@ -375,6 +457,157 @@ git worktree remove $temp_dir
 
 Or use git's index directly without a worktree checkout (faster, more complex).
 
+> **SUPERSEDED 2026-06-11.** The pseudocode above describes the original
+> ephemeral per-command worktree. What shipped (c05f559) is a persistent sparse
+> worktree at `<container>/.ditz-worktree`, reused across commands
+> (`DITZ_EPHEMERAL_WORKTREE=1` keeps the old behavior). Don't re-implement the
+> pseudocode.
+
+## Phase 7: Beads Parity
+
+Ordered by observed usage frequency. 7.0–7.7 are the "90% of muscle memory" tier.
+
+### 7.0 Clean scalar YAML
+The ppx_deriving_yaml output (`status:\n  Unstarted: []`) breaks the founding
+philosophy — issues should be cat-able and greppable. Write plain scalars
+(`status: unstarted`, `type: feature`) via custom to_yaml/of_yaml; keep reading the
+variant-map format for existing files (one-time rewrite on next save is fine).
+Bonus: the 3 hand-written phase issues on ditz-metadata become parseable — the
+human-obvious format becomes THE format. Do this FIRST: every other 7.x adds fields,
+and they should land in the stable representation.
+
+### 7.1 Identity without config
+- [ ] Reporter = `~/.ditz-config` if present, else `$DITZ_USER`/`$DITZ_EMAIL`
+      (explicit beats inferred), else `git config user.name/email`, else error
+      with a real fix-it message (PR #7)
+- [ ] `ditz init` no longer claims config exists when it doesn't
+- [ ] `init` derives the project name from `basename(cwd)`, which in worktree
+      layouts yields names like "master" — add `init --name` and default to the
+      common-root basename
+
+### 7.2 Short prefixed random IDs (`proj-a3f2k` style)
+- [ ] `ditz init --prefix foo` stores prefix in project.yaml
+- [ ] New issues get `foo-` + 5 random base36 chars, rerolled against the local
+      tree on the (rare) collision at create time — a purely local check, no
+      coordination
+- [ ] Full SHA1 and `--id custom` still accepted (idempotent creates depend on
+      `--id`); prefix matching already works
+- Design note (2026-06-11, council review): sequential `proj-N` was REJECTED.
+  (a) Nothing serializes concurrent ditz processes in one clone — two
+  simultaneous `ditz add` could mint the same N and truncate-overwrite each
+  other before commit. (b) Renumber-on-sync silently re-points existing
+  references (commit messages, agent context, blocked_by) at a different
+  issue — the worst failure mode for agents holding an ID mid-task.
+  (c) The consumers are agents copying IDs out of --json; sequence carries no
+  value for them, and creation order is already in creation_time.
+  Random suffixes make all three hazards structurally impossible.
+
+### 7.3 Creation-time metadata (beads: `-t` 84%, `--priority` 40%, `--parent` 19%)
+- [ ] `add -t|--type bugfix|feature|task`, `-c|--component`, `-p|--priority`,
+      `--parent <id>`, `--desc TEXT` (alongside existing `--desc-stdin`)
+
+### 7.4 Priority field
+- [ ] `priority: 0–4` (beads scale, default 2) in types + YAML (absent = 2)
+- [ ] `set --priority`, `list --priority N`, `ready` sorts by priority then age
+
+### 7.5 Close with reason / reopen
+- [ ] `close --reason TEXT` → logged as the close event comment (54–87% of observed
+      closes carry one; dispositions alone lose the why)
+- [ ] `reopen <id>` (closed → unstarted, logged)
+
+### 7.6 Generic status mutation
+- [ ] `set --status unstarted|in_progress|paused` — `bd update --status` is the
+      single most common mutation observed (86% of updates); agents reach for one
+      verb. `start`/`stop`/`close` stay as sugar. `set` already exists; extend it.
+
+### 7.7 Parent / epic hierarchy
+- [ ] `parent: <id>` field (distinct from blocks/blocked_by)
+- [ ] `add --parent`, `list --parent <id>`, `show --children`
+- [ ] An "epic" is just an issue with children; no special type required
+
+### 7.8 Dependency visibility
+- [ ] `dep tree <id>` / `graph` — ASCII render over blocks/blocked_by
+
+### 7.9 Configurable branch name
+- [ ] `init --branch NAME` (un-hardcode `ditz-metadata`, git.ml)
+
+### 7.10 Small parity items
+- [ ] `count` (filters as in list), `list --limit N`
+- [ ] `q`-equivalent already exists (`add -q`) — document the mapping
+
+### 7.11 Optional fields (only if migration needs them)
+- [ ] `labels: []` + `list --label`; `assignee` + `set --assignee`
+      (assignee-heavy usage was Gas Town rigs, not core workflow — decide at
+      migration time)
+
+## Phase 8: Production Hardening
+
+### 8.1 Land PR #4
+Worktree/root detection fix — required for bare-repo + worktree layouts (i.e. how
+tedks actually uses git). Council review (2026-06-11) found and fixed in-PR: the
+bare-at-root container derivation (silent cross-project writes), the worktree
+ownership check, stale-registration self-heal, init-from-bare-root crash, and
+cwd-dependent empty `list` from subdirectories. Smoke test done on the real layout.
+
+### 8.2 Write-path integrity (from the 2026-02-14 review, still valid)
+- [ ] Git backend writes through the same temp-file + rename helper as FS backend
+      (today: bare `open_out`, non-atomic + follows symlinks — git.ml)
+- [ ] `read_yaml_file` closes channel on exception (storage.ml)
+- [ ] `now_rfc3339` errors instead of silently returning epoch (issue_ops.ml)
+
+### 8.3 Sync conflict auto-resolution
+Implement the Phase 6 spec that's currently a TODO (git.ml `merge`): union
+log_events, last-write-wins status by timestamp, union references;
+`.ditz-conflict/` escape hatch when titles/descs diverge. The ID-format
+DECISION is already settled (random, 7.2) and this analysis holds for the
+current SHA1 ids too: the only same-path conflict class is two edits of the
+same issue, which this spec covers — no dependency on 7.2's implementation.
+Resolution must always emit parseable YAML.
+
+### 8.4 CI
+GitHub Actions: nix-based `dune build` + `dune runtest` on every PR
+(flake + cache action; the opam-nix toolchain must not cold-build per run).
+There is currently NO CI — PR #1–4 were merged on local test claims.
+
+### 8.5 Test isolation (rides with 8.4's CI)
+Tests must never read/write the real `$HOME` or real config — the live tracker's
+"Test User <test@example.com>" reporter on every issue is the scar tissue here.
+
+### 8.6 Type-level debt (already filed as issues)
+.mli interfaces, typed error variants (replace polymorphic `` `Msg ``), illegal
+states unrepresentable (status × disposition). Fold into 7.x type changes where the
+files are already open rather than as standalone churn.
+
+### 8.7 Tracker cleanup (already filed: "Clean up old test issues")
+Purge `issue-abc123`/`issue-abc999`; re-file or convert the 3 old-format phase
+issues; close the 2 review issues already fixed on master (unseeded Random,
+getenv HOME).
+
+## Phase 9: Migration & Rollout
+
+### 9.1 Beads import
+- [ ] `ditz import beads <issues.jsonl>` (from `bd export` or `.beads/issues.jsonl`)
+- [ ] Mapping: open→unstarted, in_progress→in_progress, blocked→(dep-derived),
+      closed→closed+fixed; priority 1:1; parent→parent; deps→blocks/blocked_by;
+      comments→log_events; beads id kept as the ditz id (idempotent re-import)
+
+### 9.2 Distribution
+- [ ] `nix build` produces the single binary; install on all machines (PATH),
+      pinned via dotfiles. An agent can't adopt a tool that isn't installed.
+
+### 9.3 Agent onboarding
+- [ ] A CLAUDE.md/AGENTS.md snippet (the `bd onboard` equivalent): the ready→start→
+      close loop, JSON flags, id conventions. Update any skills/docs that
+      hardcode beads for migrated projects.
+
+### 9.4 Migrate real projects
+- [ ] predictionbook first (lower stakes), verify a week of daily agent use —
+      this gates the 0.1.0 tag (DoD #5)
+- [ ] goals AFTER the tag; stop each project's beads daemon as it migrates
+- [ ] this repo's tracker is already ditz (dogfooding since January)
+
+### 9.5 Tag 0.1.0 with changelog
+
 ## Non-Goals
 
 Things we're explicitly NOT doing:
@@ -383,6 +616,10 @@ Things we're explicitly NOT doing:
 - No complex merge driver (auto-resolve or bail)
 - No external service integration (no JIRA bridge)
 - No web UI server
+- No beads `mol`/wisp/gate/swarm/merge-slot orchestration layer — that's Gas Town's
+  domain and it keeps beads; ditz replaces beads for plain project tracking
+- No `bd`-named CLI shim — parity is conceptual (same fields/flags/loop), agents
+  get retrained via the onboarding snippet (Phase 9.3), not via command aliasing
 
 ## Architecture
 
@@ -422,13 +659,17 @@ Target: single static binary that can be dropped anywhere.
 
 ## Open Questions
 
-1. **Issue ID format**: Keep SHA1 hashes or switch to shorter IDs?
-   - Leaning: Support both. Generate short IDs by default (8 chars), accept full SHA1.
-   - Allow `--id custom-name` for deterministic/human IDs.
+1. **Issue ID format**: ~~Keep SHA1 hashes or switch to shorter IDs?~~
+   **RESOLVED 2026-06-11**: prefixed short RANDOM (`proj-a3f2k`, Phase 7.2).
+   Short + prefixed is what the beads muscle memory actually values;
+   sequentiality was rejected by council review (concurrent same-clone minting
+   races, renumber-on-sync re-pointing live references). SHA1 and `--id custom`
+   remain accepted.
 
-2. **Config location**: `~/.ditz-config` or `~/.config/ditz/config.yaml`?
-   - Leaning: `~/.config/ditz/config.yaml` (XDG compliant)
-   - But support legacy `~/.ditz-config` for backward compat.
+2. **Config location**: ~~`~/.ditz-config` or `~/.config/ditz/config.yaml`?~~
+   **RESOLVED 2026-06-11**: mostly moot — identity comes from `git config` with
+   `~/.ditz-config` as an optional override (Phase 7.1). Beads needs zero identity
+   config and so should we.
 
 3. **Backward compat**: How much effort to spend on reading Ruby ditz repos?
    - Leaning: Best-effort. Parse the YAML, ignore the Ruby tags.
