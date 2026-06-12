@@ -63,26 +63,12 @@ module FS = struct
     |> List.map (Filename.concat dir)
 
   let read_yaml_file of_yaml path =
-    let ic = open_in path in
-    let content = really_input_string ic (in_channel_length ic) in
-    close_in ic;
+    let content = Fs_util.read_file path in
     parse_yaml of_yaml content path
 
-  (* Atomic write with temp file *)
   let write_yaml_file to_yaml path value =
     let content = to_yaml_string to_yaml value in
-    let dir = Filename.dirname path in
-    let base = Filename.basename path in
-    let temp_path, oc = Filename.open_temp_file ~temp_dir:dir (base ^ ".tmp-") "" in
-    try
-      output_string oc content;
-      close_out oc;
-      Unix.rename temp_path path;
-      Ok ()
-    with exn ->
-      close_out_noerr oc;
-      (try Sys.remove temp_path with _ -> ());
-      Error (`Msg (Printf.sprintf "Failed to write %s: %s" path (Printexc.to_string exn)))
+    Fs_util.write_file_atomic ~path ~content
 
   let load_project dir =
     read_yaml_file project_of_yaml (project_file dir)

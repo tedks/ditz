@@ -498,6 +498,31 @@ let test_storage_git_backend () =
   );
   Printf.printf "PASS: storage_git_backend\n"
 
+let test_write_does_not_follow_symlink () =
+  with_temp_git_repo (fun temp_dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
+    let wt = assert_ok (Git.create_persistent_worktree ()) in
+    (* Plant a symlink where the issue file would be written, pointing at a
+       file outside the tracker. The write must replace the link, never
+       follow it. *)
+    let victim = Filename.concat temp_dir "victim.txt" in
+    let oc = open_out victim in
+    output_string oc "precious\n";
+    close_out oc;
+    let link_target = Filename.concat (Filename.concat wt ".ditz") "issue-evil1.yaml" in
+    Unix.symlink victim link_target;
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-evil1.yaml"
+      ~content:"id: evil1\ntitle: symlink test\n"
+      ~commit_msg:"symlink test") in
+    let ic = open_in victim in
+    let line = input_line ic in
+    close_in ic;
+    assert (line = "precious");
+    assert ((Unix.lstat link_target).Unix.st_kind = Unix.S_REG)
+  );
+  Printf.printf "PASS: write_does_not_follow_symlink\n"
+
 let () =
   Printf.printf "Running git integration tests...\n\n";
   test_is_git_repo ();
@@ -522,5 +547,6 @@ let () =
   test_list_from_subdirectory ();
   test_stale_worktree_self_heal ();
   test_self_heal_spares_other_worktrees ();
+  test_write_does_not_follow_symlink ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

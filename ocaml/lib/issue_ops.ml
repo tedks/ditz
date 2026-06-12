@@ -5,7 +5,11 @@ open Types
 let now_rfc3339 () =
   match Ptime.of_float_s (Unix.gettimeofday ()) with
   | Some t -> Ptime.to_rfc3339 t
-  | None -> "1970-01-01T00:00:00Z"
+  | None ->
+    (* Only reachable with a system clock outside Ptime's representable range
+       (year 0..9999). Silently stamping the epoch would corrupt issue
+       history and last-write-wins resolution; fail loudly instead. *)
+    invalid_arg "now_rfc3339: system clock out of RFC3339 range"
 
 let add_log_event (issue : issue) ~who ~what ~comment : issue =
   let event : log_event = {

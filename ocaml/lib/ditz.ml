@@ -4,3 +4,4 @@ module Types = Types
 module Storage = Storage
 module Issue_ops = Issue_ops
 module Git = Git
+module Fs_util = Fs_util

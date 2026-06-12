@@ -37,3 +37,7 @@
 (test
  (name config_test)
  (libraries ditz unix))
+
+(test
+ (name fs_util_test)
+ (libraries ditz unix))
