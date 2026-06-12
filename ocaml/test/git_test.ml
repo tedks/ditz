@@ -523,6 +523,157 @@ let test_write_does_not_follow_symlink () =
   );
   Printf.printf "PASS: write_does_not_follow_symlink\n"
 
+(** Two clones of a shared origin, for sync divergence tests.
+    Returns (origin_bare, clone1, clone2); caller cleans all three. *)
+let make_cloned_pair prefix =
+  let seed = make_temp_dir (prefix ^ "_seed") in
+  init_git_repo seed;
+  let origin = make_temp_dir (prefix ^ "_origin") in
+  rm_rf origin;
+  run_in ~cwd:"/tmp" (Printf.sprintf "git clone --bare %s %s"
+    (Filename.quote seed) (Filename.quote origin));
+  let clone n =
+    let c = make_temp_dir (prefix ^ n) in
+    rm_rf c;
+    run_in ~cwd:"/tmp" (Printf.sprintf "git clone %s %s"
+      (Filename.quote origin) (Filename.quote c));
+    run_in ~cwd:c "git config user.email 'test@example.com'";
+    run_in ~cwd:c "git config user.name 'Test'";
+    c
+  in
+  let c1 = clone "_c1" and c2 = clone "_c2" in
+  rm_rf seed;
+  (origin, c1, c2)
+
+(* Issue fixture in the tool's serialized format; events/title/status differ
+   per call so the clones can diverge meaningfully. *)
+let sync_issue_yaml ~id ~title ~status ~events =
+  let event_block =
+    events
+    |> List.map (fun (time, what, comment) ->
+        Printf.sprintf "- time: %s\n  who: W <w@example.com>\n  what: %s\n  comment: %s"
+          time what comment)
+    |> String.concat "\n"
+  in
+  Printf.sprintf
+    {|id: %s
+title: %s
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: W <w@example.com>
+status:
+  %s: []
+disposition:
+creation_time: 2026-06-01T00:00:00-00:00
+references: []
+log_events:
+%s
+|}
+    id title status event_block
+
+let test_sync_auto_resolves_divergence () =
+  let origin, c1, c2 = make_cloned_pair "ditz_sync" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    let created = [ ("2026-06-01T00:00:00-00:00", "created", "\"\"") ] in
+    (* clone1 creates the tracker and the shared base issue, pushes *)
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"S") in
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync1.yaml"
+      ~content:(sync_issue_yaml ~id:"sync1" ~title:"Shared" ~status:"Unstarted" ~events:created)
+      ~commit_msg:"base") in
+    let () = assert_ok (Git.sync ()) in
+    (* clone2 onboards (local branch from remote -- onboarding gap workaround),
+       then diverges: status change with a NEWER event *)
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    run_in ~cwd:c2 "git branch ditz-metadata origin/ditz-metadata";
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync1.yaml"
+      ~content:(sync_issue_yaml ~id:"sync1" ~title:"Shared" ~status:"In_progress"
+        ~events:(created @ [ ("2026-06-03T00:00:00-00:00", "started", "\"\"") ]))
+      ~commit_msg:"start on clone2") in
+    (* clone1 diverges too: adds an OLDER comment event, pushes first *)
+    Sys.chdir c1;
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync1.yaml"
+      ~content:(sync_issue_yaml ~id:"sync1" ~title:"Shared" ~status:"Unstarted"
+        ~events:(created @ [ ("2026-06-02T00:00:00-00:00", "commented", "from c1") ]))
+      ~commit_msg:"comment on clone1") in
+    let () = assert_ok (Git.sync ()) in
+    (* clone2 syncs: conflict on issue-sync1.yaml must auto-resolve *)
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    let merged = assert_ok (Git.read_file_from_branch ".ditz/issue-sync1.yaml") in
+    assert (contains merged "from c1");          (* clone1's comment survived *)
+    assert (contains merged "started");          (* clone2's event survived *)
+    assert (contains merged "In_progress");      (* newer status won (LWW) *)
+    (* and clone1 can pull the resolution cleanly *)
+    Sys.chdir c1;
+    let () = assert_ok (Git.sync ()) in
+    let merged1 = assert_ok (Git.read_file_from_branch ".ditz/issue-sync1.yaml") in
+    assert (contains merged1 "In_progress");
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: sync_auto_resolves_divergence\n"
+
+let test_sync_conflict_escape_hatch () =
+  let origin, c1, c2 = make_cloned_pair "ditz_synchard" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    let created = [ ("2026-06-01T00:00:00-00:00", "created", "\"\"") ] in
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"S") in
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync2.yaml"
+      ~content:(sync_issue_yaml ~id:"sync2" ~title:"Base title" ~status:"Unstarted" ~events:created)
+      ~commit_msg:"base") in
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    run_in ~cwd:c2 "git branch ditz-metadata origin/ditz-metadata";
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync2.yaml"
+      ~content:(sync_issue_yaml ~id:"sync2" ~title:"Title from c2" ~status:"Unstarted" ~events:created)
+      ~commit_msg:"retitle on clone2") in
+    Sys.chdir c1;
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-sync2.yaml"
+      ~content:(sync_issue_yaml ~id:"sync2" ~title:"Title from c1" ~status:"Unstarted" ~events:created)
+      ~commit_msg:"retitle on clone1") in
+    let () = assert_ok (Git.sync ()) in
+    (* clone2: both sides changed the title -> sync must refuse, abort the
+       merge, leave LOCAL/REMOTE copies, and not move the local branch *)
+    Sys.chdir c2;
+    let before = match Git.git ["rev-parse"; "ditz-metadata"] with
+      | Ok r -> r | Error (`Msg e) -> failwith e in
+    (match Git.sync () with
+     | Ok () -> failwith "expected sync to fail on double title change"
+     | Error (`Msg m) ->
+       assert (contains m "issue-sync2.yaml");
+       assert (contains m "title"));
+    let after = match Git.git ["rev-parse"; "ditz-metadata"] with
+      | Ok r -> r | Error (`Msg e) -> failwith e in
+    assert (before = after);
+    let conflict_dir = Filename.concat c2 ".ditz-conflict" in
+    assert (Sys.file_exists (Filename.concat conflict_dir "issue-sync2.yaml.LOCAL"));
+    assert (Sys.file_exists (Filename.concat conflict_dir "issue-sync2.yaml.REMOTE"));
+    (* the metadata worktree is not left mid-merge *)
+    let wt = match Git.persistent_worktree_path () with
+      | Some p -> p | None -> failwith "no worktree path" in
+    (match Git.git ~cwd:wt ["rev-parse"; "-q"; "--verify"; "MERGE_HEAD"] with
+     | Ok _ -> failwith "merge was left in progress"
+     | Error _ -> ());
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: sync_conflict_escape_hatch\n"
+
 let () =
   Printf.printf "Running git integration tests...\n\n";
   test_is_git_repo ();
@@ -548,5 +699,7 @@ let () =
   test_stale_worktree_self_heal ();
   test_self_heal_spares_other_worktrees ();
   test_write_does_not_follow_symlink ();
+  test_sync_auto_resolves_divergence ();
+  test_sync_conflict_escape_hatch ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"
