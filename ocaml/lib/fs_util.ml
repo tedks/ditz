@@ -13,7 +13,14 @@ let read_file path =
     directory, then rename over the destination. Readers never observe a
     partial file (crash mid-write leaves only a temp file), and because the
     temp file is created fresh and rename replaces the destination inode, a
-    symlink planted at [path] is replaced rather than followed. *)
+    symlink planted at [path] is replaced rather than followed.
+
+    Deliberate tradeoffs: files land with open_temp_file's 0600 mode (the
+    git history, not the worktree file, is the source of truth, and git
+    re-checkouts normalize modes); no fsync before rename (power-loss
+    durability is delegated to the git object store — the guarantee here is
+    against torn writes from process death); symlinks in PARENT directories
+    are followed — the defense is scoped to the destination entry itself. *)
 let write_file_atomic ~path ~content =
   let dir = Filename.dirname path in
   let base = Filename.basename path in
