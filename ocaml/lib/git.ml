@@ -25,9 +25,7 @@ let run_git_command ?(cwd = ".") ?(ignore_repo_env = false) args =
   let exit_code = Sys.command full_cmd in
   let read_file path =
     if Sys.file_exists path then begin
-      let ic = open_in path in
-      let content = really_input_string ic (in_channel_length ic) in
-      close_in ic;
+      let content = Fs_util.read_file path in
       Sys.remove path;
       String.trim content
     end else ""
@@ -295,17 +293,16 @@ releases: []
 |} project_name project_name in
 
         let project_file = Filename.concat ditz_dir "project.yaml" in
-        let oc = open_out project_file in
-        output_string oc project_yaml;
-        close_out oc;
-
-        (* Add and commit *)
-        match git ~cwd:temp_dir ["add"; ".ditz"] with
+        match Fs_util.write_file_atomic ~path:project_file ~content:project_yaml with
         | Error e -> Error e
-        | Ok _ ->
-          match git ~cwd:temp_dir ["commit"; "-m"; "ditz: initialize issue tracker"] with
+        | Ok () ->
+          (* Add and commit *)
+          match git ~cwd:temp_dir ["add"; ".ditz"] with
           | Error e -> Error e
-          | Ok _ -> Ok ()
+          | Ok _ ->
+            match git ~cwd:temp_dir ["commit"; "-m"; "ditz: initialize issue tracker"] with
+            | Error e -> Error e
+            | Ok _ -> Ok ()
     in
     (* Clean up worktree *)
     let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
@@ -332,16 +329,19 @@ let list_ditz_files () =
       |> List.map (fun name -> ".ditz/" ^ String.trim name)
   | Error _ -> []
 
-(** Write content to a file on ditz-metadata branch using worktree *)
+(** Write content to a file on ditz-metadata branch using worktree.
+    The write is atomic (temp + rename) and does not follow a symlink planted
+    at the destination -- issue files are parsed from external sources, so the
+    write path must not be steerable. *)
 let write_to_branch ~path ~content ~commit_msg =
   with_worktree (fun worktree_path ->
     (* Write the file *)
     let full_path = Filename.concat worktree_path path in
     let dir = Filename.dirname full_path in
     let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
-    let oc = open_out full_path in
-    output_string oc content;
-    close_out oc;
+    match Fs_util.write_file_atomic ~path:full_path ~content with
+    | Error e -> Error e
+    | Ok () ->
 
     (* Add and commit *)
     match git ~cwd:worktree_path ["add"; path] with
