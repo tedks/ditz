@@ -78,6 +78,24 @@ let () =
   assert (m.blocks = [ "b"; "c" ]);
   Printf.printf "PASS: three-way list merge (no resurrection)\n";
 
+  (* 5b. Exact LWW tie (both changed, identical latest event time) keeps ours *)
+  let tie_ev = ev "2026-06-05T00:00:00Z" "changed" "" in
+  let m =
+    ok (Merge.merge_issues ~base:(Some base)
+          ~ours:(mk ~status:Closed ~disposition:(Some Fixed) ~log_events:[ e0; tie_ev ] ())
+          ~theirs:(mk ~status:Paused ~log_events:[ e0; tie_ev ] ()))
+  in
+  assert (m.status = Closed && m.disposition = Some Fixed);
+  Printf.printf "PASS: LWW tie keeps ours\n";
+
+  (* 5c. Duplicate entries collapse: list merge is a set merge *)
+  let m =
+    ok (Merge.merge_issues ~base:None
+          ~ours:(mk ~blocks:[ "a"; "a" ] ()) ~theirs:(mk ~blocks:[ "a"; "c" ] ()))
+  in
+  assert (m.blocks = [ "a"; "c" ]);
+  Printf.printf "PASS: duplicate entries collapse\n";
+
   (* 6. Without a base, lists fall back to union *)
   let m =
     ok (Merge.merge_issues ~base:None

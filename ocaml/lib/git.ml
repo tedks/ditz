@@ -390,7 +390,21 @@ let fetch () =
     never left half-merged — and LOCAL/REMOTE copies are written under
     .ditz-conflict/ in the caller's cwd for manual resolution. *)
 let resolve_conflicted_merge ~merge_error worktree_path =
-  let abort () = ignore (git ~cwd:worktree_path ["merge"; "--abort"]) in
+  (* Returns whether the abort actually succeeded — claiming "merge aborted"
+     when it wasn't would point the user away from the real problem. *)
+  let abort () =
+    match git ~cwd:worktree_path ["merge"; "--abort"] with
+    | Ok _ -> true
+    | Error _ -> false
+  in
+  let abort_note aborted =
+    if aborted then ""
+    else
+      Printf.sprintf
+        " (WARNING: 'git merge --abort' also failed; the metadata worktree at \
+         %s is still mid-merge and needs manual attention)"
+        worktree_path
+  in
   let show_stage stage file =
     match git ~cwd:worktree_path ["show"; Printf.sprintf ":%d:%s" stage file] with
     | Ok content -> Some content
@@ -462,10 +476,20 @@ let resolve_conflicted_merge ~merge_error worktree_path =
               (match fetch 1 with
                | Error e -> fail e
                | Ok base_s ->
-                 let base =
-                   Option.bind base_s (fun s ->
-                     Result.to_option (Merge.issue_of_string s))
+                 (* An EXISTING but unparseable base must hard-fail: silently
+                    degrading to base-less union mode would resurrect entries
+                    one side deliberately deleted. *)
+                 let base_result =
+                   match base_s with
+                   | None -> Ok None
+                   | Some s ->
+                     (match Merge.issue_of_string s with
+                      | Ok b -> Ok (Some b)
+                      | Error (`Msg e) -> Error ("base version unparseable: " ^ e))
                  in
+                 match base_result with
+                 | Error e -> fail e
+                 | Ok base ->
                  (match Merge.issue_of_string ours_s, Merge.issue_of_string theirs_s with
                   | Ok o, Ok t ->
                     (match Merge.merge_issues ~base ~ours:o ~theirs:t with
@@ -480,22 +504,25 @@ let resolve_conflicted_merge ~merge_error worktree_path =
                   | Error (`Msg e), _ | _, Error (`Msg e) ->
                     fail ("unparseable: " ^ e)))))
   in
+  let with_note result =
+    match result with
+    | Ok () -> Ok ()
+    | Error (`Msg m) ->
+      let aborted = abort () in
+      Error (`Msg (m ^ abort_note aborted))
+  in
   match git ~cwd:worktree_path ["diff"; "--name-only"; "--diff-filter=U"] with
-  | Error e ->
-    let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
-    Error e
+  | Error e -> with_note (Error e)
   | Ok out ->
     let files =
       String.split_on_char '\n' out
       |> List.map String.trim
       |> List.filter (fun l -> l <> "")
     in
-    if files = [] then begin
+    if files = [] then
       (* The merge failed before producing conflicts (dirty worktree,
          lock...). The original git error is the actionable one. *)
-      abort ();
-      merge_error
-    end
+      with_note merge_error
     else begin
       match
         List.filter_map
@@ -508,36 +535,49 @@ let resolve_conflicted_merge ~merge_error worktree_path =
            Logs.info (fun m ->
              m "ditz sync: auto-resolved %d conflicted file(s)" (List.length files));
            Ok ()
-         | Error e ->
-           abort ();
-           Error e)
+         | Error e -> with_note (Error e))
       | failures ->
         let conflict_dir = Filename.concat (Sys.getcwd ()) ".ditz-conflict" in
+        let dumps_ok = ref true in
         (try Unix.mkdir conflict_dir 0o755
-         with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+         with
+         | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+         | Unix.Unix_error _ -> dumps_ok := false);
         List.iter
           (fun (file, _reason, ours, theirs) ->
             let b = Filename.basename file in
             let dump suffix = function
               | None -> ()
               | Some content ->
-                ignore (Fs_util.write_file_atomic
-                          ~path:(Filename.concat conflict_dir (b ^ suffix))
-                          ~content)
+                (match Fs_util.write_file_atomic
+                         ~path:(Filename.concat conflict_dir (b ^ suffix))
+                         ~content with
+                 | Ok () -> ()
+                 | Error _ -> dumps_ok := false)
             in
             dump ".LOCAL" ours;
             dump ".REMOTE" theirs)
           failures;
-        abort ();
+        let aborted = abort () in
         let detail =
           failures
           |> List.map (fun (f, r, _, _) -> Printf.sprintf "%s (%s)" f r)
           |> String.concat ", "
         in
+        let copies =
+          if !dumps_ok then
+            Printf.sprintf "LOCAL/REMOTE copies are in %s" conflict_dir
+          else
+            Printf.sprintf
+              "copies could NOT be written to %s (check permissions/contents)"
+              conflict_dir
+        in
         Error (`Msg (Printf.sprintf
-          "Could not auto-resolve: %s. LOCAL/REMOTE copies are in %s; the merge \
-           was aborted — resolve manually and re-run 'ditz sync'."
-          detail conflict_dir))
+          "Could not auto-resolve: %s. %s; the merge was %s — resolve manually \
+           and re-run 'ditz sync'.%s"
+          detail copies
+          (if aborted then "aborted" else "NOT cleanly aborted")
+          (abort_note aborted)))
     end
 
 (** Merge origin/ditz-metadata into local ditz-metadata, auto-resolving
@@ -554,10 +594,16 @@ let merge () =
       | Error e ->
         (try resolve_conflicted_merge ~merge_error:(Error e) worktree_path
          with exn ->
-           ignore (git ~cwd:worktree_path ["merge"; "--abort"]);
+           let aborted =
+             match git ~cwd:worktree_path ["merge"; "--abort"] with
+             | Ok _ -> true
+             | Error _ -> false
+           in
            Error (`Msg (Printf.sprintf
-             "sync conflict resolution failed unexpectedly (%s); merge aborted"
-             (Printexc.to_string exn))))
+             "sync conflict resolution failed unexpectedly (%s); merge %s"
+             (Printexc.to_string exn)
+             (if aborted then "aborted"
+              else "NOT aborted — the metadata worktree needs manual attention"))))
     )
 
 (** Push ditz-metadata to origin *)
