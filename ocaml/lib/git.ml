@@ -389,11 +389,31 @@ let fetch () =
     title/desc changed on both sides) aborts the whole merge — the tracker is
     never left half-merged — and LOCAL/REMOTE copies are written under
     .ditz-conflict/ in the caller's cwd for manual resolution. *)
-let resolve_conflicted_merge worktree_path =
+let resolve_conflicted_merge ~merge_error worktree_path =
+  let abort () = ignore (git ~cwd:worktree_path ["merge"; "--abort"]) in
   let show_stage stage file =
     match git ~cwd:worktree_path ["show"; Printf.sprintf ":%d:%s" stage file] with
     | Ok content -> Some content
     | Error _ -> None
+  in
+  (* The stages that actually exist for a conflicted path, from ls-files -u
+     ("<mode> <sha> <stage>\t<path>"). A `git show` failure for a LISTED
+     stage is a hard failure for that file — treating it as "stage absent"
+     would silently reclassify a modify/modify conflict as delete/modify and
+     drop one side's content. *)
+  let stages_of file =
+    match git ~cwd:worktree_path ["ls-files"; "-u"; "--"; file] with
+    | Error (`Msg e) -> Error e
+    | Ok out ->
+      Ok
+        (String.split_on_char '\n' out
+         |> List.filter_map (fun line ->
+             match String.split_on_char '\t' line with
+             | meta :: _ ->
+               (match String.split_on_char ' ' (String.trim meta) with
+                | [ _mode; _sha; stage ] -> int_of_string_opt stage
+                | _ -> None)
+             | [] -> None))
   in
   let is_issue_file file =
     Filename.dirname file = ".ditz"
@@ -411,35 +431,54 @@ let resolve_conflicted_merge worktree_path =
        | Error (`Msg e) -> Error e)
   in
   let resolve_file file =
-    let ours = show_stage 2 file and theirs = show_stage 3 file in
-    let fail reason = Error (file, reason, ours, theirs) in
-    match ours, theirs with
-    | None, None ->
-      (match git ~cwd:worktree_path ["rm"; "--quiet"; "--"; file] with
-       | Ok _ -> Ok ()
-       | Error (`Msg e) -> fail e)
-    | Some content, None | None, Some content ->
-      (* delete/modify conflict: keep the modified side *)
-      (match stage_resolved file content with
-       | Ok () -> Ok ()
-       | Error e -> fail e)
-    | Some ours_s, Some theirs_s ->
-      if not (is_issue_file file) then
-        fail "not an issue file; cannot auto-resolve"
-      else
-        let base =
-          Option.bind (show_stage 1 file) (fun s ->
-            Result.to_option (Merge.issue_of_string s))
-        in
-        (match Merge.issue_of_string ours_s, Merge.issue_of_string theirs_s with
-         | Ok o, Ok t ->
-           (match Merge.merge_issues ~base ~ours:o ~theirs:t with
-            | Ok merged ->
-              (match stage_resolved file (Merge.issue_to_string merged) with
-               | Ok () -> Ok ()
-               | Error e -> fail e)
-            | Error fieldname -> fail ("both sides changed " ^ fieldname))
-         | Error (`Msg e), _ | _, Error (`Msg e) -> fail ("unparseable: " ^ e))
+    match stages_of file with
+    | Error e -> Error (file, e, None, None)
+    | Ok stages ->
+      let fetch n =
+        if List.mem n stages then
+          match show_stage n file with
+          | Some c -> Ok (Some c)
+          | None -> Error (Printf.sprintf "git show :%d failed for a listed stage" n)
+        else Ok None
+      in
+      (match fetch 2, fetch 3 with
+       | Error e, _ | _, Error e -> Error (file, e, None, None)
+       | Ok ours, Ok theirs ->
+         let fail reason = Error (file, reason, ours, theirs) in
+         (match ours, theirs with
+          | None, None ->
+            (match git ~cwd:worktree_path ["rm"; "--quiet"; "--"; file] with
+             | Ok _ -> Ok ()
+             | Error (`Msg e) -> fail e)
+          | Some content, None | None, Some content ->
+            (* delete/modify conflict: keep the modified side *)
+            (match stage_resolved file content with
+             | Ok () -> Ok ()
+             | Error e -> fail e)
+          | Some ours_s, Some theirs_s ->
+            if not (is_issue_file file) then
+              fail "not an issue file; cannot auto-resolve"
+            else
+              (match fetch 1 with
+               | Error e -> fail e
+               | Ok base_s ->
+                 let base =
+                   Option.bind base_s (fun s ->
+                     Result.to_option (Merge.issue_of_string s))
+                 in
+                 (match Merge.issue_of_string ours_s, Merge.issue_of_string theirs_s with
+                  | Ok o, Ok t ->
+                    (match Merge.merge_issues ~base ~ours:o ~theirs:t with
+                     | Ok merged ->
+                       (match Merge.issue_to_string merged with
+                        | Error (`Msg e) -> fail ("serialize failed: " ^ e)
+                        | Ok content ->
+                          (match stage_resolved file content with
+                           | Ok () -> Ok ()
+                           | Error e -> fail e))
+                     | Error fieldname -> fail ("both sides changed " ^ fieldname))
+                  | Error (`Msg e), _ | _, Error (`Msg e) ->
+                    fail ("unparseable: " ^ e)))))
   in
   match git ~cwd:worktree_path ["diff"; "--name-only"; "--diff-filter=U"] with
   | Error e ->
@@ -452,25 +491,27 @@ let resolve_conflicted_merge worktree_path =
       |> List.filter (fun l -> l <> "")
     in
     if files = [] then begin
-      let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
-      Error (`Msg "merge failed but git reported no conflicted files")
+      (* The merge failed before producing conflicts (dirty worktree,
+         lock...). The original git error is the actionable one. *)
+      abort ();
+      merge_error
     end
     else begin
-      let failures =
+      match
         List.filter_map
           (fun f -> match resolve_file f with Ok () -> None | Error x -> Some x)
           files
-      in
-      if failures = [] then
-        match git ~cwd:worktree_path ["commit"; "--no-edit"] with
-        | Ok _ ->
-          Logs.info (fun m ->
-            m "ditz sync: auto-resolved %d conflicted file(s)" (List.length files));
-          Ok ()
-        | Error e ->
-          let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
-          Error e
-      else begin
+      with
+      | [] ->
+        (match git ~cwd:worktree_path ["commit"; "--no-edit"] with
+         | Ok _ ->
+           Logs.info (fun m ->
+             m "ditz sync: auto-resolved %d conflicted file(s)" (List.length files));
+           Ok ()
+         | Error e ->
+           abort ();
+           Error e)
+      | failures ->
         let conflict_dir = Filename.concat (Sys.getcwd ()) ".ditz-conflict" in
         (try Unix.mkdir conflict_dir 0o755
          with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
@@ -487,7 +528,7 @@ let resolve_conflicted_merge worktree_path =
             dump ".LOCAL" ours;
             dump ".REMOTE" theirs)
           failures;
-        let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
+        abort ();
         let detail =
           failures
           |> List.map (fun (f, r, _, _) -> Printf.sprintf "%s (%s)" f r)
@@ -497,11 +538,12 @@ let resolve_conflicted_merge worktree_path =
           "Could not auto-resolve: %s. LOCAL/REMOTE copies are in %s; the merge \
            was aborted — resolve manually and re-run 'ditz sync'."
           detail conflict_dir))
-      end
     end
 
 (** Merge origin/ditz-metadata into local ditz-metadata, auto-resolving
-    conflicts where the semantics allow (see resolve_conflicted_merge) *)
+    conflicts where the semantics allow (see resolve_conflicted_merge).
+    Any exception inside resolution aborts the merge first: the tracker is
+    never left mid-merge, whatever goes wrong. *)
 let merge () =
   if not (branch_exists ~remote:true ditz_branch) then
     Ok () (* Nothing to merge *)
@@ -509,7 +551,13 @@ let merge () =
     with_worktree (fun worktree_path ->
       match git ~cwd:worktree_path ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
       | Ok _ -> Ok ()
-      | Error _ -> resolve_conflicted_merge worktree_path
+      | Error e ->
+        (try resolve_conflicted_merge ~merge_error:(Error e) worktree_path
+         with exn ->
+           ignore (git ~cwd:worktree_path ["merge"; "--abort"]);
+           Error (`Msg (Printf.sprintf
+             "sync conflict resolution failed unexpectedly (%s); merge aborted"
+             (Printexc.to_string exn))))
     )
 
 (** Push ditz-metadata to origin *)

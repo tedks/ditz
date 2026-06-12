@@ -3,8 +3,10 @@
 
     Strategy (PLAN.md Phase 6 / 8.3):
     - log_events: append-only by design -> union, dedup, sorted by time
-    - status+disposition: treated as one unit; if the sides differ, the side
-      whose latest log event is newer wins (last-write-wins); ties keep ours
+    - status+disposition: treated as one unit and three-way picked first, so
+      a side that merely commented can never revert the other side's close;
+      only when BOTH sides changed it (or no base exists) does
+      last-write-wins by latest activity apply (ties keep ours)
     - reference-ish lists (references, blocks, blocked_by, file_refs):
       three-way set merge when a base is available (additions kept, deletions
       honored, no resurrection); plain union otherwise
@@ -80,11 +82,15 @@ let merge_issues ~(base : issue option) ~(ours : issue) ~(theirs : issue) :
   let* reporter = field "reporter" ~get:(fun i -> i.reporter) in
   let* creation_time = field "creation_time" ~get:(fun i -> i.creation_time) in
   let status, disposition =
-    if ours.status = theirs.status && ours.disposition = theirs.disposition then
-      (ours.status, ours.disposition)
-    else if time_order (latest_activity theirs) (latest_activity ours) > 0 then
-      (theirs.status, theirs.disposition)
-    else (ours.status, ours.disposition)
+    let pair (i : issue) = (i.status, i.disposition) in
+    match
+      pick3 ~base:(Option.map pair base) ~ours:(pair ours) ~theirs:(pair theirs)
+    with
+    | Picked (s, d) -> (s, d)
+    | Both_changed ->
+      if time_order (latest_activity theirs) (latest_activity ours) > 0 then
+        pair theirs
+      else pair ours
   in
   let pick_list get =
     merge_list ~base:(Option.map get base) ~ours:(get ours) ~theirs:(get theirs)
@@ -115,4 +121,7 @@ let issue_of_string s =
   | Error (`Msg e) -> Error (`Msg ("YAML parse error: " ^ e))
   | Ok y -> issue_of_yaml y
 
-let issue_to_string i = Yaml.to_string_exn (issue_to_yaml i)
+(* Result, not _exn: the emitter's default buffer is small and a large issue
+   (hand-edited desc, future imports) must surface as an Error the conflict
+   resolver can abort on, never as an exception mid-merge. *)
+let issue_to_string i = Yaml.to_string ~len:(16 * 1024 * 1024) (issue_to_yaml i)

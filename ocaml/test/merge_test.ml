@@ -41,6 +41,19 @@ let () =
   assert (m'.status = Closed && m'.disposition = Some Fixed);
   Printf.printf "PASS: status last-write-wins\n";
 
+  (* 2b. A side that merely commented must NOT revert the other side's close:
+     status is three-way picked before any LWW (council round 3) *)
+  let closer =
+    mk ~status:Closed ~disposition:(Some Fixed)
+      ~log_events:[ e0; ev "2026-06-02T00:00:00Z" "closed: fixed" "" ] ()
+  in
+  let commenter = mk ~log_events:[ e0; e2 ] () (* newer activity, base status *) in
+  let m = ok (Merge.merge_issues ~base:(Some base) ~ours:closer ~theirs:commenter) in
+  assert (m.status = Closed && m.disposition = Some Fixed);
+  let m' = ok (Merge.merge_issues ~base:(Some base) ~ours:commenter ~theirs:closer) in
+  assert (m'.status = Closed && m'.disposition = Some Fixed);
+  Printf.printf "PASS: comment does not revert close\n";
+
   (* 3. Title changed on one side only: change is kept *)
   let m =
     ok (Merge.merge_issues ~base:(Some (mk ()))
@@ -75,9 +88,19 @@ let () =
 
   (* 7. Serialization round trip *)
   let i = mk ~log_events:[ e0; e1 ] ~blocks:[ "z" ] () in
-  (match Merge.issue_of_string (Merge.issue_to_string i) with
-   | Ok i' -> assert (i' = i)
-   | Error (`Msg e) -> failwith e);
+  (match Merge.issue_to_string i with
+   | Error (`Msg e) -> failwith e
+   | Ok s ->
+     (match Merge.issue_of_string s with
+      | Ok i' -> assert (i' = i)
+      | Error (`Msg e) -> failwith e));
   Printf.printf "PASS: round trip\n";
+
+  (* 8. Large issues serialize rather than raising (bounded emitter buffer) *)
+  let big = mk ~desc:(String.make 300_000 'x') () in
+  (match Merge.issue_to_string big with
+   | Ok s -> assert (String.length s > 300_000)
+   | Error (`Msg e) -> failwith ("large issue should serialize: " ^ e));
+  Printf.printf "PASS: large issue serializes\n";
 
   Printf.printf "\nAll merge tests passed!\n"
