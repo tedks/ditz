@@ -1,0 +1,18 @@
+id: phase6-sync
+title: Implement ditz sync command
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-06-12T15:59:52-00:00
+references: []
+log_events:
+- time: 2026-06-12T15:59:52-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
