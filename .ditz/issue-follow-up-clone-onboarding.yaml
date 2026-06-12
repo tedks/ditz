@@ -1,0 +1,19 @@
+id: follow-up-clone-onboarding
+title: 'Onboard fresh clones: create local ditz-metadata from origin/ditz-metadata
+  when only the remote branch exists'
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-06-12T15:59:54-00:00
+references: []
+log_events:
+- time: 2026-06-12T15:59:54-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
