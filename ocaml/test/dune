@@ -41,3 +41,7 @@
 (test
  (name fs_util_test)
  (libraries ditz unix))
+
+(test
+ (name merge_test)
+ (libraries ditz))

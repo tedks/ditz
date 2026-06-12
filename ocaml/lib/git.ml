@@ -381,7 +381,127 @@ let fetch () =
     (* Branch might not exist on remote yet, that's OK *)
     Ok ()
 
-(** Merge origin/ditz-metadata into local ditz-metadata *)
+(** Auto-resolve a conflicted merge inside the metadata worktree.
+    Conflicted issue files are merged semantically (Merge.merge_issues, using
+    git's base/ours/theirs index stages). Delete/modify keeps the modified
+    side — a concurrent edit beats a drop, resurrecting beats losing data.
+    Anything that cannot be auto-resolved (project.yaml, unparseable files,
+    title/desc changed on both sides) aborts the whole merge — the tracker is
+    never left half-merged — and LOCAL/REMOTE copies are written under
+    .ditz-conflict/ in the caller's cwd for manual resolution. *)
+let resolve_conflicted_merge worktree_path =
+  let show_stage stage file =
+    match git ~cwd:worktree_path ["show"; Printf.sprintf ":%d:%s" stage file] with
+    | Ok content -> Some content
+    | Error _ -> None
+  in
+  let is_issue_file file =
+    Filename.dirname file = ".ditz"
+    && (let b = Filename.basename file in
+        String.length b > 6 && String.sub b 0 6 = "issue-"
+        && Filename.check_suffix b ".yaml")
+  in
+  let stage_resolved file content =
+    match Fs_util.write_file_atomic
+            ~path:(Filename.concat worktree_path file) ~content with
+    | Error (`Msg e) -> Error e
+    | Ok () ->
+      (match git ~cwd:worktree_path ["add"; "--"; file] with
+       | Ok _ -> Ok ()
+       | Error (`Msg e) -> Error e)
+  in
+  let resolve_file file =
+    let ours = show_stage 2 file and theirs = show_stage 3 file in
+    let fail reason = Error (file, reason, ours, theirs) in
+    match ours, theirs with
+    | None, None ->
+      (match git ~cwd:worktree_path ["rm"; "--quiet"; "--"; file] with
+       | Ok _ -> Ok ()
+       | Error (`Msg e) -> fail e)
+    | Some content, None | None, Some content ->
+      (* delete/modify conflict: keep the modified side *)
+      (match stage_resolved file content with
+       | Ok () -> Ok ()
+       | Error e -> fail e)
+    | Some ours_s, Some theirs_s ->
+      if not (is_issue_file file) then
+        fail "not an issue file; cannot auto-resolve"
+      else
+        let base =
+          Option.bind (show_stage 1 file) (fun s ->
+            Result.to_option (Merge.issue_of_string s))
+        in
+        (match Merge.issue_of_string ours_s, Merge.issue_of_string theirs_s with
+         | Ok o, Ok t ->
+           (match Merge.merge_issues ~base ~ours:o ~theirs:t with
+            | Ok merged ->
+              (match stage_resolved file (Merge.issue_to_string merged) with
+               | Ok () -> Ok ()
+               | Error e -> fail e)
+            | Error fieldname -> fail ("both sides changed " ^ fieldname))
+         | Error (`Msg e), _ | _, Error (`Msg e) -> fail ("unparseable: " ^ e))
+  in
+  match git ~cwd:worktree_path ["diff"; "--name-only"; "--diff-filter=U"] with
+  | Error e ->
+    let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
+    Error e
+  | Ok out ->
+    let files =
+      String.split_on_char '\n' out
+      |> List.map String.trim
+      |> List.filter (fun l -> l <> "")
+    in
+    if files = [] then begin
+      let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
+      Error (`Msg "merge failed but git reported no conflicted files")
+    end
+    else begin
+      let failures =
+        List.filter_map
+          (fun f -> match resolve_file f with Ok () -> None | Error x -> Some x)
+          files
+      in
+      if failures = [] then
+        match git ~cwd:worktree_path ["commit"; "--no-edit"] with
+        | Ok _ ->
+          Logs.info (fun m ->
+            m "ditz sync: auto-resolved %d conflicted file(s)" (List.length files));
+          Ok ()
+        | Error e ->
+          let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
+          Error e
+      else begin
+        let conflict_dir = Filename.concat (Sys.getcwd ()) ".ditz-conflict" in
+        (try Unix.mkdir conflict_dir 0o755
+         with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+        List.iter
+          (fun (file, _reason, ours, theirs) ->
+            let b = Filename.basename file in
+            let dump suffix = function
+              | None -> ()
+              | Some content ->
+                ignore (Fs_util.write_file_atomic
+                          ~path:(Filename.concat conflict_dir (b ^ suffix))
+                          ~content)
+            in
+            dump ".LOCAL" ours;
+            dump ".REMOTE" theirs)
+          failures;
+        let _ = git ~cwd:worktree_path ["merge"; "--abort"] in
+        let detail =
+          failures
+          |> List.map (fun (f, r, _, _) -> Printf.sprintf "%s (%s)" f r)
+          |> String.concat ", "
+        in
+        Error (`Msg (Printf.sprintf
+          "Could not auto-resolve: %s. LOCAL/REMOTE copies are in %s; the merge \
+           was aborted — resolve manually and re-run 'ditz sync'."
+          detail conflict_dir))
+      end
+    end
+
+(** Merge origin/ditz-metadata into local ditz-metadata, auto-resolving
+    conflicts where the semantics allow (see resolve_conflicted_merge) *)
 let merge () =
   if not (branch_exists ~remote:true ditz_branch) then
     Ok () (* Nothing to merge *)
@@ -389,9 +509,7 @@ let merge () =
     with_worktree (fun worktree_path ->
       match git ~cwd:worktree_path ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
       | Ok _ -> Ok ()
-      | Error e ->
-        (* TODO: implement conflict resolution *)
-        Error e
+      | Error _ -> resolve_conflicted_merge worktree_path
     )
 
 (** Push ditz-metadata to origin *)
