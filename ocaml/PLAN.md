@@ -64,16 +64,17 @@ Each step is roughly one focused session; steps 1–2 can be a stacked-PR chain.
 - Step ownership, to keep sessions from colliding: 7.1, 8.1, 8.4 execute in
   Step 0; 8.7 in Step 1; 8.5 rides with 8.4's CI; 8.6 folds into Step 2's type
   changes. Step 2 then covers 7.0 and 7.2–7.7.
-- **Step 2 — Parity core** (Phase 7.0–7.7): clean YAML scalars; creation flags +
+- **Step 2 — Parity core** (Phase 7.0, 7.2–7.7): clean YAML scalars; creation flags +
   priority field + `close --reason` + `set --status`; prefixed short IDs;
   parent/epic. This is ~90% of the observed muscle memory.
 - **Step 3 — Agent-loop polish** (Phase 7.8–7.11): `dep tree`, `reopen`, `count`,
   `list --limit`, priority-sorted `ready`; labels/assignee if wanted.
 - **Step 4 — Migration & rollout** (Phase 9): beads JSONL import, distribution to
-  all machines, agent onboarding doc, migrate predictionbook → goals, retire their
-  beads daemons.
-- **Step 5 — Tag 0.1.0**. Everything else (HTML export, Ruby compat beyond
-  read-tolerance, `doctor`, `stale`) stays in the backlog until it earns its place.
+  all machines, agent onboarding doc, migrate predictionbook and run it for a
+  week (this gates the tag).
+- **Step 5 — Tag 0.1.0**, then migrate goals and retire both projects' beads
+  daemons. Everything else (HTML export, Ruby compat beyond read-tolerance,
+  `doctor`, `stale`) stays in the backlog until it earns its place.
 
 ## Current State
 
@@ -557,10 +558,11 @@ cwd-dependent empty `list` from subdirectories. Smoke test done on the real layo
 ### 8.3 Sync conflict auto-resolution
 Implement the Phase 6 spec that's currently a TODO (git.ml `merge`): union
 log_events, last-write-wins status by timestamp, union references;
-`.ditz-conflict/` escape hatch when titles/descs diverge. With random IDs
-(7.2) the only same-path conflict class is two edits of the same issue, which
-this spec covers — settle the ID format before or with this work. Resolution
-must always emit parseable YAML.
+`.ditz-conflict/` escape hatch when titles/descs diverge. The ID-format
+DECISION is already settled (random, 7.2) and this analysis holds for the
+current SHA1 ids too: the only same-path conflict class is two edits of the
+same issue, which this spec covers — no dependency on 7.2's implementation.
+Resolution must always emit parseable YAML.
 
 ### 8.4 CI
 GitHub Actions: nix-based `dune build` + `dune runtest` on every PR
@@ -599,8 +601,9 @@ getenv HOME).
       hardcode beads for migrated projects.
 
 ### 9.4 Migrate real projects
-- [ ] predictionbook first (lower stakes), verify a week of daily agent use
-- [ ] then goals; stop the beads daemons on both
+- [ ] predictionbook first (lower stakes), verify a week of daily agent use —
+      this gates the 0.1.0 tag (DoD #5)
+- [ ] goals AFTER the tag; stop each project's beads daemon as it migrates
 - [ ] this repo's tracker is already ditz (dogfooding since January)
 
 ### 9.5 Tag 0.1.0 with changelog
