@@ -1,0 +1,19 @@
+id: follow-up-detached-head-error
+title: Detached-HEAD .ditz-worktree yields confusing 'exists but is not valid' error
+  - add fix-it hint
+desc: ""
+type:
+  Task: []
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status:
+  Unstarted: []
+disposition:
+creation_time: 2026-06-12T00:07:35-00:00
+references: []
+log_events:
+- time: 2026-06-12T00:07:35-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
