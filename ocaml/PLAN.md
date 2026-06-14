@@ -514,17 +514,17 @@ beads-shaped solutions to beads-shaped problems we don't have.
   encoding only for epics whose members are genuinely sequenced; for pure
   grouping-only epics, use a shared `component` and NO graph edge. Document the
   pattern (Phase 9.3).
-- **Stored `priority` field — CONTESTED (operator decision pending).** Original
-  call: cut it, derive urgency from the graph at read time (7.4). **All three
-  council reviewers pushed back**, and the objection is sound: a human/agent
-  asserting "this is urgent" is *input* state, not *derived* state — so the
-  "no derived state" principle does NOT argue against a priority field (it's
-  the unblock-count that's derived). The real argument for cutting is staleness,
-  which is a bet, not a law. The concrete failure mode: on a flat or
-  lightly-linked graph (ditz's own tracker today), unblock-count is constant
-  and ordering collapses to age-only, which *buries a small-but-urgent leaf*
-  (a prod incident, a security fix, an external commitment that blocks nothing)
-  under a low-value hub. See 7.4 for the pending decision and options.
+- **Stored `priority` field — CUT (operator-confirmed 2026-06-14, eyes open).**
+  All three council reviewers pushed back, and the record stands: importance is
+  *input* state, not *derived*, so "no derived state" was the wrong
+  justification; the real basis for cutting is staleness, and the accepted cost
+  is the flat-graph blind spot — on a lightly-linked tracker, derivation
+  collapses to age-only and a small-but-urgent leaf (prod incident, security
+  fix) sorts below a low-value hub. Decision: stay pure-derive (7.4). This is
+  NOT a one-way door — `priority` is additive later (absent = unset), so if
+  dogfooding (predictionbook migration) surfaces the blind spot in real use, we
+  add it then, on evidence. Until then, `-t bugfix` and component filters are
+  the interim lever for urgent work.
 
 ### 7.0 Clean scalar YAML — THE foundation
 The ppx_deriving_yaml output (`status:\n  Unstarted: []`) breaks the founding
@@ -576,14 +576,9 @@ none of this exists today; `ready` is a bare filter with no sort):
       is 0 and ordering collapses to oldest-first. That is the heuristic's blind
       spot for urgent-but-unblocking work (see the priority debate above).
 
-**Pending operator decision — primary sort key:**
-- Option A (original): pure derivation — score, then creation_time. No stored field.
-- Option B (council consensus): optional `priority` input (unset by default) as
-  the PRIMARY key when set, score as the tiebreaker, creation_time last. Keeps
-  the derivation insight (it still orders everything unset and breaks ties) AND
-  lets an agent flag the urgent leaf the graph can't see. Re-adds one stored
-  field — but it is *input*, not derived, so it doesn't violate the principle.
-  Beads import (9.1) would then preserve priority instead of dropping it.
+**Primary sort key — DECIDED (2026-06-14): pure derivation.** `ready` orders by
+score, then creation_time, then id. No stored priority field (see the cut
+rationale above; additive later if dogfooding proves the blind spot bites).
 
 ### 7.5 count / list --limit
 - [ ] `count` (same filters as `list`), `list --limit N`. These name the
@@ -687,9 +682,11 @@ runs warning-free; tracker synced.
 - [ ] Mapping: open→unstarted, in_progress→in_progress, blocked→(dep-derived),
       closed→closed+fixed; deps→blocks/blocked_by; parent→`blocked_by` (epics are
       blocks, Phase 7); comments→log_events; beads id kept as the ditz id via
-      `--id` (idempotent re-import). `priority` → depends on the 7.4 decision:
-      DROPPED under Option A, preserved under Option B (the council noted dropping
-      it is lossy — ~40% of beads creates set it).
+      `--id` (idempotent re-import). `priority` → no field to import into (7.4
+      pure-derive), but dropping it silently is lossy (~40% of beads creates set
+      it), so RECORD the original beads priority in an import `log_event` comment
+      ("imported beads priority: 1") — auditable, recoverable, and ready if a
+      priority field is ever added. (Council's "at least auditable" point.)
 - [ ] Partial-graph imports: a beads `blocked` issue whose blockers aren't in
       the export must still land as `unstarted` with whatever `blocked_by` edges
       ARE present (don't invent a `Blocked` status — ditz derives blocked-ness);
