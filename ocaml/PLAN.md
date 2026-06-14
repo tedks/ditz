@@ -43,7 +43,7 @@ files + git, not a better daemon.
    parent/epic field, ID scheme, or dep-graph renderer — each was a
    beads-shaped answer to a problem we don't have (Phase 7 records why).
 3. **No known data-loss paths**: atomic writes on both backends, conflict-safe sync.
-4. **CI green on every PR** (currently there is no CI at all).
+4. **CI green on every PR** (DONE — PR #6; nix-cached ~5-min runs).
 5. **One real project migrated off beads**: predictionbook, used daily by agents
    for a week without manual repair, gates 0.1.0; goals migrates after the tag.
 
@@ -487,25 +487,44 @@ beads-shaped solutions to beads-shaped problems we don't have.
   mission need.
 - **Prefixed / sequential / random IDs — CUT.** Stripped of muscle memory, an
   identifier needs only two things: a stable cross-reference handle and
-  coordination-free, collision-safe minting. SHA1-of-content gives both today,
-  and prefix-matching makes them short to type — the *git idiom* (nobody types
-  full commit hashes). The `proj-` prefix solved a beads problem: beads DBs
-  span projects/rigs and need namespacing. Our tracker is per-repo, so **the
-  repo IS the namespace.** `--id custom` already covers deterministic/human
-  handles (and idempotent creates depend on it). Cutting this also retires the
-  one design question that took two council rounds to settle — the tell that it
-  was the wrong question.
-- **parent / epic field — CUT.** Belonging is already expressed by `component`
-  (`list --component`); sequencing by `blocks`/`blocked_by`. An "epic" is just
-  an issue `blocked_by` its members — and `ready` already hides it until they
-  close. No new field; document the pattern (Phase 9.3).
-- **Stored `priority` field — CUT in favor of derivation.** `ready` answers
-  "what *can* I work on"; something must answer "what *should* I." Rather than
-  store an operator-set number that goes stale, **derive urgency from the graph
-  at read time** (7.4): sort `ready` by how many open issues each transitively
-  unblocks, then by age. Storing no derived state is a core principle, and
-  "work on what unblocks the most" is a better agent heuristic than a
-  three-week-old number. Revisit a stored field only if dogfooding misses it.
+  coordination-free, collision-safe minting. We have both today — but note the
+  mechanism precisely (council C1): `make_id` is a SHA1 of
+  `time+random+content`, NOT content-addressed, so the same title yields a
+  different ID each call. Stability comes from the ID being **written once and
+  then immutable**; collision-safety from the time+random entropy plus a
+  local-tree check; `--id custom` covers deterministic/human handles (and
+  idempotent creates depend on it — don't "simplify" `make_id` to a pure
+  content hash, that reintroduces cross-clone collisions). Prefix-matching
+  makes IDs short to type — the *git idiom* (nobody types full commit hashes).
+  The `proj-` prefix solved a beads problem: beads DBs span projects/rigs and
+  need namespacing; our tracker is per-repo, so **the repo IS the namespace.**
+  Known edge (document, don't fix): a short prefix unique in clone A can go
+  ambiguous in clone B after a sync — `find_issue_by_id` already errors with the
+  candidate list rather than guessing, the same way git handles a grown hash
+  space. Cutting this retires the one design question two council rounds
+  couldn't settle — the tell it was the wrong question.
+- **parent / epic field — CUT.** Belonging is expressed by `component`
+  (`list --component`); sequencing by `blocks`/`blocked_by`. An "epic" is an
+  issue `blocked_by` its members — `ready` already hides it until they close.
+  Two honest limits to document (council I1), not paper over: (a) `component`
+  is a SINGLE string, so an issue lives in one grouping axis only —
+  multi-membership ("auth epic AND backend component") is out of scope; (b)
+  epic-as-`blocked_by` is a *sequencing* claim, so it skews 7.4's unblock-count
+  (every member appears to "unblock" the epic). Therefore: use the blocks
+  encoding only for epics whose members are genuinely sequenced; for pure
+  grouping-only epics, use a shared `component` and NO graph edge. Document the
+  pattern (Phase 9.3).
+- **Stored `priority` field — CONTESTED (operator decision pending).** Original
+  call: cut it, derive urgency from the graph at read time (7.4). **All three
+  council reviewers pushed back**, and the objection is sound: a human/agent
+  asserting "this is urgent" is *input* state, not *derived* state — so the
+  "no derived state" principle does NOT argue against a priority field (it's
+  the unblock-count that's derived). The real argument for cutting is staleness,
+  which is a bet, not a law. The concrete failure mode: on a flat or
+  lightly-linked graph (ditz's own tracker today), unblock-count is constant
+  and ordering collapses to age-only, which *buries a small-but-urgent leaf*
+  (a prod incident, a security fix, an external commitment that blocks nothing)
+  under a low-value hub. See 7.4 for the pending decision and options.
 
 ### 7.0 Clean scalar YAML — THE foundation
 The ppx_deriving_yaml output (`status:\n  Unstarted: []`) breaks the founding
@@ -539,9 +558,32 @@ what I want. Don't make me answer questions."), and one command = one commit =
 cleaner metadata history than add-then-set.
 - [ ] `add -t|--type`, `-c|--component`, `--desc TEXT` (alongside `--desc-stdin`)
 
-### 7.4 Graph-derived `ready` ordering
-- [ ] `ready` sorts by transitive-open-unblock count, then age. Pure read-time
-      derivation over `blocks`/`blocked_by`; nothing stored.
+### 7.4 `ready` ordering
+Derivation mechanics, required regardless of the priority decision (council C2 —
+none of this exists today; `ready` is a bare filter with no sort):
+- [ ] Score = count of currently-OPEN issues each transitively unblocks, over
+      the `blocked_by` edges. Closed issues contribute nothing.
+- [ ] Cycle-safe: nothing prevents cycles in `blocks`/`blocked_by` today (the
+      ops are list-appends with no check, and a hand-edited/merged file can be
+      one-sided), so the walk MUST be a memoized DFS with a visited-set — a
+      naive recursion will not terminate. Single memoized post-order pass
+      (O(V+E)), not per-node re-walk.
+- [ ] Tiebreak: ascending `creation_time` (lexicographic RFC3339), then `id`
+      for total stability. NOTE: load order is NOT age — FS `readdir` is
+      OS-arbitrary and git `ls-tree` is by id; the sort key must be the
+      `creation_time` field explicitly.
+- [ ] Flat-graph degeneration (state it plainly): with few/no deps, every score
+      is 0 and ordering collapses to oldest-first. That is the heuristic's blind
+      spot for urgent-but-unblocking work (see the priority debate above).
+
+**Pending operator decision — primary sort key:**
+- Option A (original): pure derivation — score, then creation_time. No stored field.
+- Option B (council consensus): optional `priority` input (unset by default) as
+  the PRIMARY key when set, score as the tiebreaker, creation_time last. Keeps
+  the derivation insight (it still orders everything unset and breaks ties) AND
+  lets an agent flag the urgent leaf the graph can't see. Re-adds one stored
+  field — but it is *input*, not derived, so it doesn't violate the principle.
+  Beads import (9.1) would then preserve priority instead of dropping it.
 
 ### 7.5 count / list --limit
 - [ ] `count` (same filters as `list`), `list --limit N`. These name the
@@ -580,6 +622,14 @@ to the feedback loop, not by preference.
       repo's `AGENTS.md`/`CLAUDE.md`** — the ditz-native `bd onboard`, landing
       in the file agents already read on arrival, travelling with the project
       via git, no daemon, no command to remember.
+- [ ] CLOBBER SAFETY (council I3, all three reviewers — the most concrete gap):
+      these files are policy-bearing and, in tedks' setup, often SYMLINKS to a
+      canonical instruction file. So `init` must: append only, between sentinel
+      markers (`<!-- ditz:onboard -->`…`<!-- /ditz:onboard -->`); never
+      overwrite; be idempotent (skip if the markers are already present);
+      **refuse to follow a symlink** (write through one and it corrupts the
+      shared canonical file for every project). Absent the file, create it;
+      otherwise inject the block. Re-`init` must be a no-op.
 - [ ] NOT a `ditz guide` command (a pull an agent won't think to make) and NOT
       an operating-preamble inside `context` (run repeatedly to load state — a
       fixed manual per call is pure token waste).
@@ -636,8 +686,14 @@ runs warning-free; tracker synced.
 - [ ] `ditz import beads <issues.jsonl>` (from `bd export` or `.beads/issues.jsonl`)
 - [ ] Mapping: open→unstarted, in_progress→in_progress, blocked→(dep-derived),
       closed→closed+fixed; deps→blocks/blocked_by; parent→`blocked_by` (epics are
-      blocks, Phase 7); comments→log_events; priority→DROPPED (we derive at read
-      time, 7.4); beads id kept as the ditz id via `--id` (idempotent re-import)
+      blocks, Phase 7); comments→log_events; beads id kept as the ditz id via
+      `--id` (idempotent re-import). `priority` → depends on the 7.4 decision:
+      DROPPED under Option A, preserved under Option B (the council noted dropping
+      it is lossy — ~40% of beads creates set it).
+- [ ] Partial-graph imports: a beads `blocked` issue whose blockers aren't in
+      the export must still land as `unstarted` with whatever `blocked_by` edges
+      ARE present (don't invent a `Blocked` status — ditz derives blocked-ness);
+      warn on dangling edge targets rather than failing the import.
 - Why OCaml and not a contrib script, re Philosophy "Parse it myself if the CLI
   is weird": that line protects DAILY read access — never being locked out of
   your own issues when the tool misbehaves — and import doesn't spend it (issues
@@ -685,8 +741,9 @@ Things we're explicitly NOT doing:
   namespace, so prefixed/sequential/random IDs solve a problem we don't have (Phase 7)
 - No `parent`/`epic` field — `component` is grouping, `blocks` is sequencing; an
   epic is an issue blocked by its members (Phase 7)
-- No stored `priority` field — urgency is derived from the graph at read time
-  (`ready` ordering, 7.4); storing derived state violates a core principle (Phase 7)
+- No stored *derived* state (issue counts, cached graph rollups) — derive at
+  read time. (A stored `priority` is *input*, not derived, so it is NOT covered
+  by this — its fate is the open 7.4 decision, not a non-goal.)
 
 ## Architecture
 
