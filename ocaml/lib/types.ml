@@ -1,14 +1,93 @@
 (** Core domain types for ditz *)
 
+(* Enum YAML converters are hand-written (below) rather than derived. The ppx
+   emits a variant-map form (`type:\n  Task: []`) that breaks the founding
+   "cat-able, greppable" mission. We emit plain scalars (`type: task`) and read
+   BOTH the scalar form and the legacy variant-map form, so existing files keep
+   loading and rewrite to scalars on their next save. *)
 type issue_type = Bugfix | Feature | Task
-[@@deriving yaml]
-
 type issue_status = Unstarted | In_progress | Paused | Closed
-[@@deriving yaml]
-
 type disposition = Fixed | Wontfix | Reorg
-[@@deriving yaml]
+type release_status = Unreleased | Released
 
+(* Scalar names — single source of truth for both display and YAML. *)
+let issue_type_to_string = function
+  | Bugfix -> "bugfix"
+  | Feature -> "feature"
+  | Task -> "task"
+
+let status_to_string = function
+  | Unstarted -> "unstarted"
+  | In_progress -> "in_progress"
+  | Paused -> "paused"
+  | Closed -> "closed"
+
+let disposition_to_string = function
+  | Fixed -> "fixed"
+  | Wontfix -> "wontfix"
+  | Reorg -> "reorg"
+
+let release_status_to_string = function
+  | Unreleased -> "unreleased"
+  | Released -> "released"
+
+(* Read an enum written either as a scalar ("task") or the legacy ppx
+   variant-map ({Task: []}); normalize to a lowercased tag. *)
+let yaml_enum_tag = function
+  | `String s -> Some (String.lowercase_ascii (String.trim s))
+  | `O [(name, _)] -> Some (String.lowercase_ascii (String.trim name))
+  | _ -> None
+
+let enum_of_yaml ~what parse yaml =
+  match yaml_enum_tag yaml with
+  | Some tag ->
+    (match parse tag with
+     | Some v -> Ok v
+     | None -> Error (`Msg (Printf.sprintf "invalid %s: %s" what tag)))
+  | None -> Error (`Msg (Printf.sprintf "invalid %s: expected scalar" what))
+
+let issue_type_to_yaml t : Yaml.value = `String (issue_type_to_string t)
+let issue_type_of_yaml yaml =
+  enum_of_yaml ~what:"type"
+    (function
+      | "bugfix" -> Some Bugfix
+      | "feature" -> Some Feature
+      | "task" -> Some Task
+      | _ -> None)
+    yaml
+
+let issue_status_to_yaml s : Yaml.value = `String (status_to_string s)
+let issue_status_of_yaml yaml =
+  enum_of_yaml ~what:"status"
+    (function
+      | "unstarted" -> Some Unstarted
+      | "in_progress" -> Some In_progress
+      | "paused" -> Some Paused
+      | "closed" -> Some Closed
+      | _ -> None)
+    yaml
+
+let disposition_to_yaml d : Yaml.value = `String (disposition_to_string d)
+let disposition_of_yaml yaml =
+  enum_of_yaml ~what:"disposition"
+    (function
+      | "fixed" -> Some Fixed
+      | "wontfix" -> Some Wontfix
+      | "reorg" -> Some Reorg
+      | _ -> None)
+    yaml
+
+let release_status_to_yaml r : Yaml.value = `String (release_status_to_string r)
+let release_status_of_yaml yaml =
+  enum_of_yaml ~what:"release_status"
+    (function
+      | "unreleased" -> Some Unreleased
+      | "released" -> Some Released
+      | _ -> None)
+    yaml
+
+(* Records derive their YAML; the enum field converters above are resolved by
+   name (foo_to_yaml / foo_of_yaml), so the records emit clean scalars too. *)
 type log_event = {
   time: string; (* ISO8601 *)
   who: string;
@@ -48,9 +127,6 @@ type component = {
 }
 [@@deriving yaml]
 
-type release_status = Unreleased | Released
-[@@deriving yaml]
-
 type release = {
   name: string;
   status: release_status;
@@ -83,27 +159,11 @@ let make_id ~title ~desc ~reporter =
   let data = String.concat "\n" [now; string_of_float (Random.float 1.0); reporter; title; desc] in
   Digestif.SHA1.(digest_string data |> to_hex)
 
-let issue_type_to_string = function
-  | Bugfix -> "bugfix"
-  | Feature -> "feature"
-  | Task -> "task"
-
-let status_to_string = function
-  | Unstarted -> "unstarted"
-  | In_progress -> "in_progress"
-  | Paused -> "paused"
-  | Closed -> "closed"
-
 let status_widget = function
   | Unstarted -> "_"
   | In_progress -> ">"
   | Paused -> "="
   | Closed -> "x"
-
-let disposition_to_string = function
-  | Fixed -> "fixed"
-  | Wontfix -> "wontfix"
-  | Reorg -> "reorg"
 
 (* JSON output helpers *)
 

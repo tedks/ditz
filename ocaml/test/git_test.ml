@@ -612,12 +612,16 @@ let test_sync_auto_resolves_divergence () =
     let merged = assert_ok (Git.read_file_from_branch ".ditz/issue-sync1.yaml") in
     assert (contains merged "from c1");          (* clone1's comment survived *)
     assert (contains merged "started");          (* clone2's event survived *)
-    assert (contains merged "In_progress");      (* newer status won (LWW) *)
+    (* newer status won (LWW); merge re-serializes in scalar form (7.0).
+       The fixtures are still written in legacy variant-map form above, so this
+       also exercises legacy-read -> scalar-write through the sync path. *)
+    assert (contains merged "in_progress");
+    assert (not (contains merged "In_progress"));
     (* and clone1 can pull the resolution cleanly *)
     Sys.chdir c1;
     let () = assert_ok (Git.sync ()) in
     let merged1 = assert_ok (Git.read_file_from_branch ".ditz/issue-sync1.yaml") in
-    assert (contains merged1 "In_progress");
+    assert (contains merged1 "in_progress");
     cleanup ()
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_auto_resolves_divergence\n"
