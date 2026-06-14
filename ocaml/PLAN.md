@@ -36,9 +36,12 @@ files + git, not a better daemon.
 
 1. **Zero-config**: identity falls back to `git config user.name/email`;
    `ditz init && ditz add "x"` works on a fresh machine with no `~/.ditz-config`.
-2. **Parity for the observed 90%**: typed/prioritized creation, generic status
-   update, close-with-reason, ready loop, short prefixed IDs, parent/epic,
-   deps + tree view, comments, JSON everywhere.
+2. **Mission parity, the ditz way** (re-scoped 2026-06-14, see Phase 7):
+   cat-able/greppable scalar YAML, one-shot typed creation, status as data
+   (`reopen`, `close --reason`, `set --status`), graph-derived `ready`
+   ordering, `count`/`--limit`, JSON everywhere. NOT a stored priority field,
+   parent/epic field, ID scheme, or dep-graph renderer — each was a
+   beads-shaped answer to a problem we don't have (Phase 7 records why).
 3. **No known data-loss paths**: atomic writes on both backends, conflict-safe sync.
 4. **CI green on every PR** (currently there is no CI at all).
 5. **One real project migrated off beads**: predictionbook, used daily by agents
@@ -61,17 +64,20 @@ Each step is roughly one focused session; steps 1–2 can be a stacked-PR chain.
   issues) — cleanup rewrites live tracker data, so it waits for the trustworthy
   write path. Before parity work pulls more usage (and before migration imports
   real data) the write path must be trustworthy.
-- Step ownership, to keep sessions from colliding: 7.1, 8.1, 8.4 execute in
-  Step 0; 8.7 in Step 1; 8.5 rides with 8.4's CI; 8.6 folds into Step 2's type
-  changes. Step 2 then covers 7.0 and 7.2–7.7.
-- **Step 2 — Parity core** (Phase 7.0, 7.2–7.7): clean YAML scalars; creation flags +
-  priority field + `close --reason` + `set --status`; prefixed short IDs;
-  parent/epic. This is ~90% of the observed muscle memory.
-- **Step 3 — Agent-loop polish** (Phase 7.8–7.11): `dep tree`, `reopen`, `count`,
-  `list --limit`, priority-sorted `ready`; labels/assignee if wanted.
-- **Step 4 — Migration & rollout** (Phase 9): beads JSONL import, distribution to
-  all machines, agent onboarding doc, migrate predictionbook and run it for a
-  week (this gates the tag).
+- Step ownership, to keep sessions from colliding: 7.1, 8.1, 8.4 done in
+  Steps 0–1; 8.5 rode with CI; 8.6 type-debt folds into 7.0.
+- **Step 2 — ditz-native core** (Phase 7.0, 7.2, 7.3): clean scalar YAML FIRST
+  (the foundation and the primary documentation mechanism), then status-as-data
+  (`reopen`, `close --reason`, `set --status`) and one-shot typed creation.
+  Land the Tier-1 documentation (errors-name-the-remedy, empty-state redirects)
+  alongside, since the commands are already open.
+- **Step 3 — polish & self-documentation** (Phase 7.4, 7.5 + docs tiers 2–3):
+  graph-derived `ready` ordering, `count`/`--limit`, clone onboarding, `FORMAT.md`,
+  and `init` writing the agent snippet into `AGENTS.md`. Fittingly, most of this
+  step is documentation: when the file is the interface, the format doc is the
+  product.
+- **Step 4 — Migration & rollout** (Phase 9): `ditz import beads`, distribution to
+  all machines, migrate predictionbook and run it for a week (this gates the tag).
 - **Step 5 — Tag 0.1.0**, then migrate goals and retire both projects' beads
   daemons. Everything else (HTML export, Ruby compat beyond read-tolerance,
   `doctor`, `stale`) stays in the backlog until it earns its place.
@@ -463,142 +469,195 @@ Or use git's index directly without a worktree checkout (faster, more complex).
 > (`DITZ_EPHEMERAL_WORKTREE=1` keeps the old behavior). Don't re-implement the
 > pseudocode.
 
-## Phase 7: Beads Parity
+## Phase 7: ditz-native core (re-scoped 2026-06-14)
 
-Ordered by observed usage frequency. 7.0–7.7 are the "90% of muscle memory" tier.
+Re-scoped from "match beads feature-for-feature" to "serve the mission the
+ditz way." The mission (Philosophy + Phase 5): **agents read and write issues
+as plain text files; git is the database; no derived state is stored; the file
+is the interface.** Held against that, several planned features turned out to be
+beads-shaped solutions to beads-shaped problems we don't have.
 
-### 7.0 Clean scalar YAML
+### What we cut, and why
+
+- **dep tree / `graph` renderer — CUT.** Beads needs a tree *viewer* because
+  sqlite hides the data — you can't see a relationship without querying the
+  daemon. Our graph is already plain text: `blocks:` / `blocked_by:` lines you
+  can `grep`, walk with `--json | jq`, or dump with `context` and let the LLM
+  reader understand the structure. A renderer is a human convenience, not a
+  mission need.
+- **Prefixed / sequential / random IDs — CUT.** Stripped of muscle memory, an
+  identifier needs only two things: a stable cross-reference handle and
+  coordination-free, collision-safe minting. SHA1-of-content gives both today,
+  and prefix-matching makes them short to type — the *git idiom* (nobody types
+  full commit hashes). The `proj-` prefix solved a beads problem: beads DBs
+  span projects/rigs and need namespacing. Our tracker is per-repo, so **the
+  repo IS the namespace.** `--id custom` already covers deterministic/human
+  handles (and idempotent creates depend on it). Cutting this also retires the
+  one design question that took two council rounds to settle — the tell that it
+  was the wrong question.
+- **parent / epic field — CUT.** Belonging is already expressed by `component`
+  (`list --component`); sequencing by `blocks`/`blocked_by`. An "epic" is just
+  an issue `blocked_by` its members — and `ready` already hides it until they
+  close. No new field; document the pattern (Phase 9.3).
+- **Stored `priority` field — CUT in favor of derivation.** `ready` answers
+  "what *can* I work on"; something must answer "what *should* I." Rather than
+  store an operator-set number that goes stale, **derive urgency from the graph
+  at read time** (7.4): sort `ready` by how many open issues each transitively
+  unblocks, then by age. Storing no derived state is a core principle, and
+  "work on what unblocks the most" is a better agent heuristic than a
+  three-week-old number. Revisit a stored field only if dogfooding misses it.
+
+### 7.0 Clean scalar YAML — THE foundation
 The ppx_deriving_yaml output (`status:\n  Unstarted: []`) breaks the founding
 philosophy — issues should be cat-able and greppable. Write plain scalars
-(`status: unstarted`, `type: feature`) via custom to_yaml/of_yaml; keep reading the
-variant-map format for existing files (one-time rewrite on next save is fine).
-Bonus: the 3 hand-written phase issues on ditz-metadata become parseable — the
-human-obvious format becomes THE format. Do this FIRST: every other 7.x adds fields,
-and they should land in the stable representation.
+(`status: unstarted`, `type: feature`) via custom to_yaml/of_yaml; keep reading
+the variant-map format for existing files (one-time rewrite on next save).
+This is not just integrity — it is the **primary documentation mechanism**: when
+the file reads `status: unstarted`, the data is self-describing and an agent
+learns the whole schema by `cat`-ing one issue. `grep "status: closed"` becomes
+literally true. Do this FIRST: every other change adds fields, and they should
+land in the stable, self-documenting representation. (8.6 type-debt folds in
+here, since the type files are open anyway.)
 
-### 7.1 Identity without config
-- [ ] Reporter = `~/.ditz-config` if present, else `$DITZ_USER`/`$DITZ_EMAIL`
-      (explicit beats inferred), else `git config user.name/email`, else error
-      with a real fix-it message (PR #7)
-- [ ] `ditz init` no longer claims config exists when it doesn't
-- [ ] `init` derives the project name from `basename(cwd)`, which in worktree
-      layouts yields names like "master" — add `init --name` and default to the
-      common-root basename
+### 7.1 Identity without config — DONE (PR #7)
+Reporter resolves `~/.ditz-config` → `$DITZ_USER`/`$DITZ_EMAIL` → `git config`
+→ fix-it error. Remaining: `init` derives project name from `basename(cwd)`,
+which yields "master" in worktree layouts — add `init --name`, default to the
+common-root basename.
 
-### 7.2 Short prefixed random IDs (`proj-a3f2k` style)
-- [ ] `ditz init --prefix foo` stores prefix in project.yaml
-- [ ] New issues get `foo-` + 5 random base36 chars, rerolled against the local
-      tree on the (rare) collision at create time — a purely local check, no
-      coordination
-- [ ] Full SHA1 and `--id custom` still accepted (idempotent creates depend on
-      `--id`); prefix matching already works
-- Design note (2026-06-11, council review): sequential `proj-N` was REJECTED.
-  (a) Nothing serializes concurrent ditz processes in one clone — two
-  simultaneous `ditz add` could mint the same N and truncate-overwrite each
-  other before commit. (b) Renumber-on-sync silently re-points existing
-  references (commit messages, agent context, blocked_by) at a different
-  issue — the worst failure mode for agents holding an ID mid-task.
-  (c) The consumers are agents copying IDs out of --json; sequence carries no
-  value for them, and creation order is already in creation_time.
-  Random suffixes make all three hazards structurally impossible.
-
-### 7.3 Creation-time metadata (beads: `-t` 84%, `--priority` 40%, `--parent` 19%)
-- [ ] `add -t|--type bugfix|feature|task`, `-c|--component`, `-p|--priority`,
-      `--parent <id>`, `--desc TEXT` (alongside existing `--desc-stdin`)
-
-### 7.4 Priority field
-- [ ] `priority: 0–4` (beads scale, default 2) in types + YAML (absent = 2)
-- [ ] `set --priority`, `list --priority N`, `ready` sorts by priority then age
-
-### 7.5 Close with reason / reopen
-- [ ] `close --reason TEXT` → logged as the close event comment (54–87% of observed
-      closes carry one; dispositions alone lose the why)
+### 7.2 Status as data
+`closed` is currently a dead-end state (`start_issue` refuses it, issue_ops.ml)
+and close events can't carry their why — data-model holes independent of beads.
 - [ ] `reopen <id>` (closed → unstarted, logged)
+- [ ] `close --reason TEXT` → logged as the close event comment
+- [ ] `set --status unstarted|in_progress|paused` — one verb for the common
+      mutation; `start`/`stop`/`close` stay as sugar. `set` already exists.
 
-### 7.6 Generic status mutation
-- [ ] `set --status unstarted|in_progress|paused` — `bd update --status` is the
-      single most common mutation observed (86% of updates); agents reach for one
-      verb. `start`/`stop`/`close` stay as sugar. `set` already exists; extend it.
+### 7.3 One-shot creation
+Completes ditz's own non-interactive principle (Phase 5: "I'm an AI. I know
+what I want. Don't make me answer questions."), and one command = one commit =
+cleaner metadata history than add-then-set.
+- [ ] `add -t|--type`, `-c|--component`, `--desc TEXT` (alongside `--desc-stdin`)
 
-### 7.7 Parent / epic hierarchy
-- [ ] `parent: <id>` field (distinct from blocks/blocked_by)
-- [ ] `add --parent`, `list --parent <id>`, `show --children`
-- [ ] An "epic" is just an issue with children; no special type required
+### 7.4 Graph-derived `ready` ordering
+- [ ] `ready` sorts by transitive-open-unblock count, then age. Pure read-time
+      derivation over `blocks`/`blocked_by`; nothing stored.
 
-### 7.8 Dependency visibility
-- [ ] `dep tree <id>` / `graph` — ASCII render over blocks/blocked_by
+### 7.5 count / list --limit
+- [ ] `count` (same filters as `list`), `list --limit N`. These name the
+      `... | jq length` and `... | head` idioms as discoverable affordances —
+      a small but real form of structural documentation (see below).
 
-### 7.9 Configurable branch name
-- [ ] `init --branch NAME` (un-hardcode `ditz-metadata`, git.ml)
+### Documentation model (agent-first, three tiers)
 
-### 7.10 Small parity items
-- [ ] `count` (filters as in list), `list --limit N`
-- [ ] `q`-equivalent already exists (`add -q`) — document the mapping
+Governing principle: **agents don't leave the loop to read docs; they read
+what's already in context — tool output and error messages.** Rank by proximity
+to the feedback loop, not by preference.
 
-### 7.11 Optional fields (only if migration needs them)
-- [ ] `labels: []` + `list --label`; `assignee` + `set --assignee`
-      (assignee-heavy usage was Gas Town rigs, not core workflow — decide at
-      migration time)
+**Tier 1 — baked into output, at the two moments an agent is actually reading:**
+- [ ] Errors name the remedy: closed→`reopen`, ambiguous-id→list candidates
+      (done), no-tracker→`ditz init`. The agent is blocked and reading — the
+      one moment a hint is guaranteed consumed.
+- [ ] Empty-states redirect: `ready` empty→"N blocked"; `list` empty→"`ditz
+      add`". Silence makes an agent guess.
+- [ ] HARD RULE: never in `--json` (breaks the jq pipe → trains distrust of
+      `--json`), never in `-q`, never as happy-path success-noise (banner
+      blindness + token waste). Surprise and stuck, only.
+
+**Tier 2 — structural (the CLI shape is the doc):**
+- [ ] Symmetry: ship `reopen` partly *because* it is the visible inverse of
+      `close`; `--json`/`-q` on every command so learning it once licenses
+      assuming it everywhere.
+- [ ] `--help` examples are the loop (`ready → start → close --reason`) and one
+      jq idiom, not a flag dump.
+- [ ] 7.0 scalar YAML: the issue files ARE the schema doc (learned by example,
+      zero extra tokens, always present).
+
+**Tier 3 — pull docs (for the human and the first-contact agent):**
+- [ ] `FORMAT.md`: one-issue-one-file, the YAML schema, the git-branch model.
+      When the file is the interface, this is the product manual.
+- [ ] Onboarding snippet delivered agent-first: **`ditz init` writes it into the
+      repo's `AGENTS.md`/`CLAUDE.md`** — the ditz-native `bd onboard`, landing
+      in the file agents already read on arrival, travelling with the project
+      via git, no daemon, no command to remember.
+- [ ] NOT a `ditz guide` command (a pull an agent won't think to make) and NOT
+      an operating-preamble inside `context` (run repeatedly to load state — a
+      fixed manual per call is pure token waste).
+
+### Backlog (not blocking 0.1.0)
+- `init --branch NAME` (un-hardcode `ditz-metadata`) — no mission driver while
+  the tracker is per-repo.
+- `labels` / `assignee` fields — nothing in the mission wants them; the
+  assignee-heavy usage in the histories was Gas Town rigs (a non-goal).
 
 ## Phase 8: Production Hardening
 
-### 8.1 Land PR #4
+### 8.1 Land PR #4 — DONE
 Worktree/root detection fix — required for bare-repo + worktree layouts (i.e. how
 tedks actually uses git). Council review (2026-06-11) found and fixed in-PR: the
 bare-at-root container derivation (silent cross-project writes), the worktree
 ownership check, stale-registration self-heal, init-from-bare-root crash, and
 cwd-dependent empty `list` from subdirectories. Smoke test done on the real layout.
 
-### 8.2 Write-path integrity (from the 2026-02-14 review, still valid)
-- [ ] Git backend writes through the same temp-file + rename helper as FS backend
-      (today: bare `open_out`, non-atomic + follows symlinks — git.ml)
-- [ ] `read_yaml_file` closes channel on exception (storage.ml)
-- [ ] `now_rfc3339` errors instead of silently returning epoch (issue_ops.ml)
+### 8.2 Write-path integrity — DONE (PR #8)
+- [x] Git backend writes through the same temp-file + rename helper as FS backend
+      (shared `Fs_util.write_file_atomic`; atomic + symlink-safe)
+- [x] `read_yaml_file` closes channel on exception (`Fs_util.read_file`, Fun.protect)
+- [x] `now_rfc3339` raises instead of silently returning epoch (issue_ops.ml)
 
-### 8.3 Sync conflict auto-resolution
-Implement the Phase 6 spec that's currently a TODO (git.ml `merge`): union
-log_events, last-write-wins status by timestamp, union references;
-`.ditz-conflict/` escape hatch when titles/descs diverge. The ID-format
-DECISION is already settled (random, 7.2) and this analysis holds for the
-current SHA1 ids too: the only same-path conflict class is two edits of the
-same issue, which this spec covers — no dependency on 7.2's implementation.
-Resolution must always emit parseable YAML.
+### 8.3 Sync conflict auto-resolution — DONE (PR #9)
+Pure `Merge` module over git index stages: log_events union (time-sorted),
+status+disposition three-way-picked-then-LWW, no-resurrection list merges,
+hard-conflict on double-changed scalars → abort + `.ditz-conflict/` LOCAL/REMOTE
+escape hatch. IDs stay content-SHA1 (7.2 cut); the only same-path conflict class
+is two edits of one issue, which this covers. Resolution emits parseable YAML.
 
-### 8.4 CI
-GitHub Actions: nix-based `dune build` + `dune runtest` on every PR
-(flake + cache action; the opam-nix toolchain must not cold-build per run).
-There is currently NO CI — PR #1–4 were merged on local test claims.
+### 8.4 CI — DONE (PR #6)
+GitHub Actions, nix-based `dune build` + `dune runtest` on every PR, `/nix/store`
+cached (~5-min warm runs). Backlog nits (filed): `concurrency` group, job timeout.
 
-### 8.5 Test isolation (rides with 8.4's CI)
-Tests must never read/write the real `$HOME` or real config — the live tracker's
-"Test User <test@example.com>" reporter on every issue is the scar tissue here.
+### 8.5 Test isolation — DONE
+Tests scrub `$HOME`/`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` (config_test) and use
+temp repos; new writes no longer carry the "Test User" reporter.
 
-### 8.6 Type-level debt (already filed as issues)
+### 8.6 Type-level debt — folds into 7.0
 .mli interfaces, typed error variants (replace polymorphic `` `Msg ``), illegal
-states unrepresentable (status × disposition). Fold into 7.x type changes where the
-files are already open rather than as standalone churn.
+states unrepresentable (status × disposition). Do it during the 7.0 scalar-YAML
+rewrite, when the type files are already open — not as standalone churn.
 
-### 8.7 Tracker cleanup (already filed: "Clean up old test issues")
-Purge `issue-abc123`/`issue-abc999`; re-file or convert the 3 old-format phase
-issues; close the 2 review issues already fixed on master (unseeded Random,
-getenv HOME).
+### 8.7 Tracker cleanup — DONE
+Purged `issue-abc123`/`abc999`; re-filed the 3 old-format phase issues in tool
+format and closed them; closed the review issues fixed by PRs #4/#8. `ditz list`
+runs warning-free; tracker synced.
 
 ## Phase 9: Migration & Rollout
 
-### 9.1 Beads import
+### 9.1 Beads import — in OCaml, deliberately
 - [ ] `ditz import beads <issues.jsonl>` (from `bd export` or `.beads/issues.jsonl`)
 - [ ] Mapping: open→unstarted, in_progress→in_progress, blocked→(dep-derived),
-      closed→closed+fixed; priority 1:1; parent→parent; deps→blocks/blocked_by;
-      comments→log_events; beads id kept as the ditz id (idempotent re-import)
+      closed→closed+fixed; deps→blocks/blocked_by; parent→`blocked_by` (epics are
+      blocks, Phase 7); comments→log_events; priority→DROPPED (we derive at read
+      time, 7.4); beads id kept as the ditz id via `--id` (idempotent re-import)
+- Why OCaml and not a contrib script, re Philosophy "Parse it myself if the CLI
+  is weird": that line protects DAILY read access — never being locked out of
+  your own issues when the tool misbehaves — and import doesn't spend it (issues
+  remain plain files afterward). Import is one-shot, lossy-if-wrong data
+  migration; it wants the type model's validation, status/event mapping, and
+  `--id` idempotency, which a jq script reimplements badly. Keep the beads-schema
+  half tolerant and isolated (beads' JSONL is the unstable external thing); our
+  types are the stable half.
 
 ### 9.2 Distribution
 - [ ] `nix build` produces the single binary; install on all machines (PATH),
       pinned via dotfiles. An agent can't adopt a tool that isn't installed.
 
-### 9.3 Agent onboarding
-- [ ] A CLAUDE.md/AGENTS.md snippet (the `bd onboard` equivalent): the ready→start→
-      close loop, JSON flags, id conventions. Update any skills/docs that
-      hardcode beads for migrated projects.
+### 9.3 Agent onboarding — delivered agent-first
+- [ ] `ditz init` writes the snippet (ready→start→close loop, `--json` flags, id
+      conventions, the epic=blocks and component=grouping patterns) into the
+      repo's `AGENTS.md`/`CLAUDE.md` — see Phase 7's documentation model. Lands
+      in the file agents already read; travels with the project via git.
+- [ ] `FORMAT.md` (the schema/branch-model manual) committed to this repo.
+- [ ] Update any skills/docs that hardcode beads for migrated projects.
 
 ### 9.4 Migrate real projects
 - [ ] predictionbook first (lower stakes), verify a week of daily agent use —
@@ -620,6 +679,14 @@ Things we're explicitly NOT doing:
   domain and it keeps beads; ditz replaces beads for plain project tracking
 - No `bd`-named CLI shim — parity is conceptual (same fields/flags/loop), agents
   get retrained via the onboarding snippet (Phase 9.3), not via command aliasing
+- No dep-tree / `graph` renderer — the graph is already plain text in the files
+  (`grep`, `jq`, `context`); a viewer exists only because sqlite hid the data (Phase 7)
+- No ID scheme beyond content-SHA1 + prefix-matching + `--id` — the repo is the
+  namespace, so prefixed/sequential/random IDs solve a problem we don't have (Phase 7)
+- No `parent`/`epic` field — `component` is grouping, `blocks` is sequencing; an
+  epic is an issue blocked by its members (Phase 7)
+- No stored `priority` field — urgency is derived from the graph at read time
+  (`ready` ordering, 7.4); storing derived state violates a core principle (Phase 7)
 
 ## Architecture
 
