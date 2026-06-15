@@ -20,22 +20,49 @@ let add_log_event (issue : issue) ~who ~what ~comment : issue =
   } in
   { issue with log_events = issue.log_events @ [event] }
 
-let close_issue (issue : issue) ~who ~disposition : issue =
+(* [comment] carries the close reason; it lands on the close log event
+   (pass "" for none). Required rather than optional to keep the subject-first
+   argument order all the other ops use. *)
+let close_issue (issue : issue) ~disposition ~comment ~who : issue =
   let disp_str = disposition_to_string disposition in
   let issue = { issue with status = Closed; disposition = Some disposition } in
-  add_log_event issue ~who ~what:("closed: " ^ disp_str) ~comment:""
+  add_log_event issue ~who ~what:("closed: " ^ disp_str) ~comment
 
 let start_issue (issue : issue) ~who =
   if issue.status = Closed then
-    Error (`Msg (Printf.sprintf "issue %s is closed" issue.id))
+    Error (`Msg (Printf.sprintf "issue %s is closed; reopen it first" issue.id))
   else
     Ok (add_log_event { issue with status = In_progress } ~who ~what:"started" ~comment:"")
 
 let stop_issue (issue : issue) ~who =
   if issue.status = Closed then
-    Error (`Msg (Printf.sprintf "issue %s is closed" issue.id))
+    Error (`Msg (Printf.sprintf "issue %s is closed; reopen it first" issue.id))
   else
     Ok (add_log_event { issue with status = Paused } ~who ~what:"stopped" ~comment:"")
+
+(* The visible inverse of close: closed -> unstarted, disposition cleared. *)
+let reopen_issue (issue : issue) ~who =
+  if issue.status <> Closed then
+    Error (`Msg (Printf.sprintf "issue %s is not closed (nothing to reopen)" issue.id))
+  else
+    Ok (add_log_event { issue with status = Unstarted; disposition = None }
+          ~who ~what:"reopened" ~comment:"")
+
+(* Generic status mutation for the open states. Closing is via close_issue
+   (it records a disposition), so Closed is refused here with the remedy.
+   Setting an open status on a closed issue revives it (disposition cleared). *)
+let set_status (issue : issue) ~status ~who =
+  match status with
+  | Closed ->
+    Error (`Msg (Printf.sprintf
+      "use 'close %s' to close an issue (it records a disposition)" issue.id))
+  | _ ->
+    let revived = issue.status = Closed in
+    let what =
+      if revived then Printf.sprintf "reopened (status -> %s)" (status_to_string status)
+      else Printf.sprintf "status -> %s" (status_to_string status)
+    in
+    Ok (add_log_event { issue with status; disposition = None } ~who ~what ~comment:"")
 
 let add_comment (issue : issue) ~who ~comment =
   add_log_event issue ~who ~what:"commented" ~comment

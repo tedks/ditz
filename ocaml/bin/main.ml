@@ -292,7 +292,8 @@ let close_cmd =
   let fixed_flag = Arg.(value & flag & info ["fixed"] ~doc:"Close as fixed") in
   let wontfix_flag = Arg.(value & flag & info ["wontfix"] ~doc:"Close as won't fix") in
   let reorg_flag = Arg.(value & flag & info ["reorg"] ~doc:"Close due to reorganization") in
-  let run ids fixed wontfix reorg json quiet () =
+  let reason_opt = Arg.(value & opt (some string) None & info ["reason"] ~docv:"TEXT" ~doc:"Reason for closing (recorded on the close event)") in
+  let run ids fixed wontfix reorg reason json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -316,7 +317,7 @@ let close_cmd =
           match Ditz.Storage.find_issue_by_id config.issue_dir id with
           | Error (`Msg e) -> (ok, (id, e) :: err)
           | Ok issue ->
-            let issue = Ditz.Issue_ops.close_issue issue ~who:config.name ~disposition:disp in
+            let issue = Ditz.Issue_ops.close_issue issue ~who:config.name ~disposition:disp ~comment:(Option.value reason ~default:"") in
             match Ditz.Storage.save_issue config.issue_dir issue with
             | Ok () -> (issue.id :: ok, err)
             | Error (`Msg e) -> (ok, (id, e) :: err)
@@ -342,7 +343,48 @@ let close_cmd =
            List.iter (fun (id, e) -> Fmt.epr "Error closing %s: %s@." id e) errors);
         if errors = [] then 0 else 1
   in
-  Cmd.v info Term.(const run $ ids_arg $ fixed_flag $ wontfix_flag $ reorg_flag $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ ids_arg $ fixed_flag $ wontfix_flag $ reorg_flag $ reason_opt $ json_flag $ quiet_flag $ setup_log_term)
+
+let reopen_cmd =
+  let doc = "Reopen one or more closed issues" in
+  let info = Cmd.info "reopen" ~doc in
+  let ids_arg = Arg.(non_empty & pos_all string [] & info [] ~docv:"ID" ~doc:"Issue ID(s) (or prefix)") in
+  let run ids json quiet () =
+    let mode = output_mode json quiet in
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) ->
+      Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      let (reopened, errors) = List.fold_left (fun (ok, err) id ->
+        match Ditz.Storage.find_issue_by_id config.issue_dir id with
+        | Error (`Msg e) -> (ok, (id, e) :: err)
+        | Ok issue ->
+          match Ditz.Issue_ops.reopen_issue issue ~who:config.name with
+          | Error (`Msg e) -> (ok, (id, e) :: err)
+          | Ok issue ->
+            match Ditz.Storage.save_issue config.issue_dir issue with
+            | Ok () -> (issue :: ok, err)
+            | Error (`Msg e) -> (ok, (id, e) :: err)
+      ) ([], []) ids in
+      let reopened = List.rev reopened in
+      let errors = List.rev errors in
+      (match mode with
+       | Json ->
+         let reopened_json = String.concat "," (List.map Ditz.Types.simple_issue_json reopened) in
+         let errors_json = String.concat "," (List.map (fun (id, e) ->
+           Printf.sprintf {|{"id":"%s","error":"%s"}|}
+             (Ditz.Types.escape_json_string id)
+             (Ditz.Types.escape_json_string e)
+         ) errors) in
+         Fmt.pr {|{"reopened":[%s],"errors":[%s]}@.|} reopened_json errors_json
+       | Quiet ->
+         List.iter (fun (i : Ditz.Types.issue) -> Fmt.pr "%s@." i.id) reopened
+       | Human ->
+         List.iter (fun (i : Ditz.Types.issue) -> Fmt.pr "Reopened issue %s@." i.id) reopened;
+         List.iter (fun (id, e) -> Fmt.epr "Error reopening %s: %s@." id e) errors);
+      if errors = [] then 0 else 1
+  in
+  Cmd.v info Term.(const run $ ids_arg $ json_flag $ quiet_flag $ setup_log_term)
 
 let start_cmd =
   let doc = "Start working on one or more issues" in
@@ -740,7 +782,8 @@ let set_cmd =
   let title_opt = Arg.(value & opt (some string) None & info ["title"] ~docv:"TITLE" ~doc:"Set title") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
-  let run id type_str component title desc desc_stdin json quiet () =
+  let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Set status (unstarted, in_progress, paused)") in
+  let run id type_str component title desc desc_stdin status_str json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -750,6 +793,21 @@ let set_cmd =
       | Error (`Msg e) ->
         Fmt.epr "Error: %s@." e; 1
       | Ok issue ->
+        (* Status first: it can fail (e.g. attempting to set Closed), and a
+           failure should abort the whole set rather than partially apply. *)
+        let status_result = match status_str with
+          | None -> Ok issue
+          | Some s ->
+            match status_of_string s with
+            | None -> Error (Printf.sprintf "unknown status '%s' (use unstarted, in_progress, paused)" s)
+            | Some st ->
+              (match Ditz.Issue_ops.set_status issue ~status:st ~who:config.name with
+               | Ok i -> Ok i
+               | Error (`Msg e) -> Error e)
+        in
+        match status_result with
+        | Error e -> Fmt.epr "Error: %s@." e; 1
+        | Ok issue ->
         (* Apply updates *)
         let issue = match type_str with
           | None -> issue
@@ -782,7 +840,7 @@ let set_cmd =
         | Error (`Msg e) ->
           Fmt.epr "Error: %s@." e; 1
   in
-  Cmd.v info Term.(const run $ id_arg $ type_opt $ component_opt $ title_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ id_arg $ type_opt $ component_opt $ title_opt $ desc_opt $ desc_stdin_flag $ status_opt $ json_flag $ quiet_flag $ setup_log_term)
 
 (* Search command *)
 let search_cmd =
@@ -967,6 +1025,7 @@ let main_cmd =
     init_cmd;
     show_cmd;
     close_cmd;
+    reopen_cmd;
     start_cmd;
     stop_cmd;
     drop_cmd;
