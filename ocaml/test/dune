@@ -52,3 +52,7 @@
 (test
  (name merge_test)
  (libraries ditz))
+
+(test
+ (name graph_test)
+ (libraries ditz))
