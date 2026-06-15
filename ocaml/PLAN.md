@@ -558,27 +558,33 @@ what I want. Don't make me answer questions."), and one command = one commit =
 cleaner metadata history than add-then-set.
 - [ ] `add -t|--type`, `-c|--component`, `--desc TEXT` (alongside `--desc-stdin`)
 
-### 7.4 `ready` ordering
-Derivation mechanics, required regardless of the priority decision (council C2 —
-none of this exists today; `ready` is a bare filter with no sort):
-- [ ] Score = count of currently-OPEN issues each transitively unblocks, over
-      the `blocked_by` edges. Closed issues contribute nothing.
-- [ ] Cycle-safe: nothing prevents cycles in `blocks`/`blocked_by` today (the
-      ops are list-appends with no check, and a hand-edited/merged file can be
-      one-sided), so the walk MUST be a memoized DFS with a visited-set — a
-      naive recursion will not terminate. Single memoized post-order pass
-      (O(V+E)), not per-node re-walk.
-- [ ] Tiebreak: ascending `creation_time` (lexicographic RFC3339), then `id`
-      for total stability. NOTE: load order is NOT age — FS `readdir` is
-      OS-arbitrary and git `ls-tree` is by id; the sort key must be the
-      `creation_time` field explicitly.
-- [ ] Flat-graph degeneration (state it plainly): with few/no deps, every score
-      is 0 and ordering collapses to oldest-first. That is the heuristic's blind
-      spot for urgent-but-unblocking work (see the priority debate above).
+### 7.4 `ready` ordering — DONE (PR #15)
+- [x] Score = count of currently-OPEN issues each transitively unblocks, over
+      the `blocked_by` edges (authoritative). Closed issues don't count.
+- [x] Cycle-safe traversal (visited set) — `lib/graph.ml`. (Per-node bounded
+      DFS, O(V·(V+E)) worst case; trivial at tracker scale, full memoization
+      deferred until it matters.)
+- [x] Tiebreak: ascending `creation_time` (RFC3339), then `id`. Load order is
+      NOT age — sort key is the `creation_time` field explicitly.
+- [x] Flat-graph degenerates to oldest-first — the accepted blind spot.
+- [x] Pure derivation, no stored priority field (operator decision).
 
-**Primary sort key — DECIDED (2026-06-14): pure derivation.** `ready` orders by
-score, then creation_time, then id. No stored priority field (see the cut
-rationale above; additive later if dogfooding proves the blind spot bites).
+### 7.6 Dependency integrity & visibility — `deps` (PR for the deps cluster)
+Layered, since a hand-editable/sync-merged format can't be made cycle-proof:
+- [x] **L0** — the `ready`/Graph traversal is cycle-safe (visited set), so a
+      cyclic graph never hangs the tool. Ships with 7.4.
+- [x] **L1** — `blocks` refuses an edge that would close a cycle
+      (`Graph.blocks_would_cycle`); catches the CLI path with a clear message.
+- [x] **L2** — `deps` command over the same `Graph`: `deps <id>` ASCII
+      blocks-subtree (cycle-marked), `deps --check` validates the whole graph
+      (cycles via Tarjan SCC, dangling refs, one-sided edges; nonzero exit on
+      problems), `deps --json`, `deps --dot` (Graphviz; emit-text-render-
+      externally, scales past ASCII). The rendered tree is a PULL command,
+      kept OUT of `context` (agents read `blocks:` lines fine).
+- Graph renderer was CUT in PR #10 then UN-CUT: the cost flipped once Step 3
+  built the traversal for ready-ordering + cycle handling — a renderer is now
+  a print over code we already have, not standalone work. `deps --check` is a
+  structured validator, NOT the sqlite-style viewer the cut targeted.
 
 ### 7.5 count / list --limit
 - [ ] `count` (same filters as `list`), `list --limit N`. These name the
@@ -732,8 +738,10 @@ Things we're explicitly NOT doing:
   domain and it keeps beads; ditz replaces beads for plain project tracking
 - No `bd`-named CLI shim — parity is conceptual (same fields/flags/loop), agents
   get retrained via the onboarding snippet (Phase 9.3), not via command aliasing
-- No dep-tree / `graph` renderer — the graph is already plain text in the files
-  (`grep`, `jq`, `context`); a viewer exists only because sqlite hid the data (Phase 7)
+- ~~No dep-tree / `graph` renderer~~ — UN-CUT (Phase 7.6): a `deps` renderer
+  became near-free once Step 3 built the traversal for ready-ordering + cycle
+  handling. We still emit text (ASCII/`--dot`), not a sqlite-style live viewer;
+  rendering stays a pull command out of `context`.
 - No ID scheme beyond content-SHA1 + prefix-matching + `--id` — the repo is the
   namespace, so prefixed/sequential/random IDs solve a problem we don't have (Phase 7)
 - No `parent`/`epic` field — `component` is grouping, `blocks` is sequencing; an
