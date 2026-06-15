@@ -7,3 +7,4 @@ module Git = Git
 module Fs_util = Fs_util
 module Merge = Merge
 module Graph = Graph
+module Import_beads = Import_beads

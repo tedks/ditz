@@ -136,5 +136,32 @@ out="$("$BIN" deps no-such-id 2>&1)"; check "deps missing id errors" 1 "$?"
 "$BIN" add 'evil "q" title' --id evilq --ids-only >/dev/null
 contains "deps --dot escapes quotes" '\"q\"' "$("$BIN" deps --dot)"
 
+# Step 4: import beads JSONL from stdin
+printf '%s\n' \
+  '{"id":"imp-1","title":"imported open","status":"open","priority":1,"issue_type":"bug"}' \
+  '{"id":"imp-2","title":"imported closed","status":"closed","close_reason":"done deal","issue_type":"task"}' \
+  | "$BIN" import - >/dev/null 2>&1
+check "import from stdin" 0 "$?"
+contains "imported issue present" '"status":"closed"' "$("$BIN" show imp-2 --json)"
+contains "import maps close_reason to event" "done deal" "$("$BIN" show imp-2)"
+contains "import maps open->unstarted" '"status":"unstarted"' "$("$BIN" show imp-1 --json)"
+# idempotent re-import skips
+out="$(printf '%s\n' '{"id":"imp-1","title":"imported open","status":"open"}' | "$BIN" import - 2>&1)"
+contains "re-import is idempotent" "1 already present" "$out"
+# unknown format rejected
+out="$(echo '{}' | "$BIN" import - --format jira 2>&1)"; check "import unknown format rejected" 1 "$?"
+# council-convergence regression: an invalid-id bead that blocks a valid issue
+# must NOT leak its id into the valid issue's blocks (the invalid bead is
+# skipped, so the reciprocal edge must be dropped too).
+imp_out="$(printf '%s\n' \
+  '{"id":"okv","title":"valid one","status":"open"}' \
+  '{"id":"bad.v","title":"invalid id","status":"open","dependencies":[{"issue_id":"bad.v","depends_on_id":"okv","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"
+contains "invalid-id bead warned" "invalid issue id 'bad.v'" "$imp_out"
+contains "valid issue has no leaked invalid blocks" '"blocks":[]' "$("$BIN" show okv --json)"
+# the skipped invalid id must not appear in the graph at all (tracker has other
+# fixtures, so check the leak specifically, not global cleanliness)
+case "$("$BIN" deps --check 2>&1)" in *bad.v*) echo "FAIL: bad.v leaked into graph"; fail=1;; *) echo "ok: no bad.v leak in deps --check";; esac
+
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"
