@@ -1137,32 +1137,36 @@ let import_cmd =
            with Sys_error e -> Fmt.epr "Error reading %s: %s@." path e; exit 1)
       in
       let beads, parse_warns = Ditz.Import_beads.parse_jsonl text in
-      (* Drop in-file duplicate ids (keep first), then drop dependency edges
-         whose endpoint id ditz can't store — both with distinct warnings. *)
-      let beads, dup_warns = Ditz.Import_beads.dedup beads in
       let valid id = Result.is_ok (Ditz.Storage.validate_id id) in
+      (* Drop in-file duplicate ids (keep first). *)
+      let beads, dup_warns = Ditz.Import_beads.dedup beads in
+      (* Drop whole beads whose OWN id ditz can't store, BEFORE reciprocal
+         reconstruction — otherwise a skipped invalid issue would still leak its
+         id into a valid issue's `blocks` via the reverse edge (save_issue only
+         validates an issue's own id, not its relation ids). [council convergence] *)
+      let beads, id_warns =
+        let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> valid b.id) beads in
+        (ok, List.map (fun (b : Ditz.Import_beads.bead) -> Printf.sprintf "skipped invalid issue id '%s'" b.id) bad)
+      in
+      (* Drop dependency edges whose endpoint id ditz can't store. *)
       let beads, edge_warns = Ditz.Import_beads.sanitize_edges ~valid beads in
       let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
       let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
-      (* Issue ids ditz can't store safely (e.g. containing a '.') are skipped
-         with a warning rather than silently mangled. *)
-      let warnings = ref (parse_warns @ dup_warns @ edge_warns) in
+      let warnings = ref (parse_warns @ dup_warns @ id_warns @ edge_warns) in
       let created = ref [] and skipped = ref [] in
       List.iter
         (fun (b : Ditz.Import_beads.bead) ->
-          match Ditz.Storage.validate_id b.id with
-          | Error (`Msg e) -> warnings := Printf.sprintf "skipped %s: %s" b.id e :: !warnings
-          | Ok _ ->
-            (* Idempotent: an existing issue is left untouched. *)
-            (match Ditz.Storage.find_issue_by_exact_id config.issue_dir b.id with
-             | Ok _ -> skipped := b.id :: !skipped
-             | Error _ ->
-               let blocks = try Hashtbl.find reciprocal b.id with Not_found -> [] in
-               let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks b in
-               (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
-                        config.issue_dir issue with
-                | Ok () -> created := b.id :: !created
-                | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings)))
+          (* All remaining beads have valid ids. Idempotent: an existing issue
+             is left untouched. *)
+          match Ditz.Storage.find_issue_by_exact_id config.issue_dir b.id with
+          | Ok _ -> skipped := b.id :: !skipped
+          | Error _ ->
+            let blocks = try Hashtbl.find reciprocal b.id with Not_found -> [] in
+            let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks b in
+            (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
+                     config.issue_dir issue with
+             | Ok () -> created := b.id :: !created
+             | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings))
         beads;
       let created = List.rev !created and skipped = List.rev !skipped in
       let warnings = List.rev !warnings in

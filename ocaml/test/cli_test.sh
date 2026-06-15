@@ -150,6 +150,18 @@ out="$(printf '%s\n' '{"id":"imp-1","title":"imported open","status":"open"}' | 
 contains "re-import is idempotent" "1 already present" "$out"
 # unknown format rejected
 out="$(echo '{}' | "$BIN" import - --format jira 2>&1)"; check "import unknown format rejected" 1 "$?"
+# council-convergence regression: an invalid-id bead that blocks a valid issue
+# must NOT leak its id into the valid issue's blocks (the invalid bead is
+# skipped, so the reciprocal edge must be dropped too).
+imp_out="$(printf '%s\n' \
+  '{"id":"okv","title":"valid one","status":"open"}' \
+  '{"id":"bad.v","title":"invalid id","status":"open","dependencies":[{"issue_id":"bad.v","depends_on_id":"okv","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"
+contains "invalid-id bead warned" "invalid issue id 'bad.v'" "$imp_out"
+contains "valid issue has no leaked invalid blocks" '"blocks":[]' "$("$BIN" show okv --json)"
+# the skipped invalid id must not appear in the graph at all (tracker has other
+# fixtures, so check the leak specifically, not global cleanliness)
+case "$("$BIN" deps --check 2>&1)" in *bad.v*) echo "FAIL: bad.v leaked into graph"; fail=1;; *) echo "ok: no bad.v leak in deps --check";; esac
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"
