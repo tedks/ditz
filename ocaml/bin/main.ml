@@ -645,12 +645,14 @@ let blocks_cmd =
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
-      (* Find both issues *)
-      match Ditz.Storage.find_issue_by_id config.issue_dir blocker_id with
+      (* Load the tracker once: both id lookups and the cycle check resolve
+         against the same snapshot (was three loads). *)
+      let all = Ditz.Storage.load_issues config.issue_dir in
+      match Ditz.Storage.find_issue_by_id_in all blocker_id with
       | Error (`Msg e) ->
         Fmt.epr "Error finding blocker: %s@." e; 1
       | Ok blocker ->
-        match Ditz.Storage.find_issue_by_id config.issue_dir blocked_id with
+        match Ditz.Storage.find_issue_by_id_in all blocked_id with
         | Error (`Msg e) ->
           Fmt.epr "Error finding blocked: %s@." e; 1
         | Ok blocked ->
@@ -659,7 +661,7 @@ let blocks_cmd =
              still a nonsense state ("each waits on the other"), so we prevent
              it at the CLI rather than silently store it. (Hand-edit/sync can
              still introduce one; `deps --check` catches those.) *)
-          if Ditz.Graph.blocks_would_cycle (Ditz.Storage.load_issues config.issue_dir)
+          if Ditz.Graph.blocks_would_cycle all
                ~blocker:blocker.id ~blocked:blocked.id then begin
             Fmt.epr "Error: %s blocks %s would create a dependency cycle (%s already \
                      blocks %s, directly or transitively). Run 'ditz deps --check'.@."
@@ -725,6 +727,8 @@ let deps_cmd =
         let one_sided = Ditz.Graph.one_sided_edges issues in
         let clean = cycles = [] && dangling = [] && one_sided = [] in
         if json then begin
+          (* Each "cycle" is a strongly-connected component — a SET of mutually
+             reachable ids, not an ordered path; the key name says so. *)
           let cyc_json = String.concat "," (List.map (fun c ->
             "[" ^ String.concat "," (List.map (fun x -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string x)) c) ^ "]") cycles) in
           let dang_json = String.concat "," (List.map (fun (i, m, rel) ->
@@ -733,13 +737,13 @@ let deps_cmd =
           let os_json = String.concat "," (List.map (fun (a, b) ->
             Printf.sprintf {|{"blocker":"%s","blocked":"%s"}|}
               (Ditz.Types.escape_json_string a) (Ditz.Types.escape_json_string b)) one_sided) in
-          Fmt.pr {|{"ok":%b,"cycles":[%s],"dangling":[%s],"one_sided":[%s]}@.|}
+          Fmt.pr {|{"ok":%b,"cyclic_components":[%s],"dangling":[%s],"one_sided":[%s]}@.|}
             clean cyc_json dang_json os_json
         end else if clean then
           Fmt.pr "Dependency graph OK (%d issues, no cycles/dangling/one-sided edges).@."
             (List.length issues)
         else begin
-          List.iter (fun c -> Fmt.pr "CYCLE: %s@." (String.concat " -> " c)) cycles;
+          List.iter (fun c -> Fmt.pr "CYCLE (mutually blocking): %s@." (String.concat ", " c)) cycles;
           List.iter (fun (i, m, rel) -> Fmt.pr "DANGLING: %s %s %s (no such issue)@." i rel m) dangling;
           List.iter (fun (a, b) -> Fmt.pr "ONE-SIDED: %s blocks %s recorded on only one side@." a b) one_sided
         end;
@@ -753,9 +757,16 @@ let deps_cmd =
         | Ok root ->
           if json then begin
             let lst l = "[" ^ String.concat "," (List.map (fun x -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string x)) l) ^ "]" in
+            (* direct_blocks derived from the authoritative blocked_by adjacency
+               (not the stored reciprocal blocks field), so all three views
+               agree even on one-sided data. *)
+            let direct_blocks =
+              try Hashtbl.find (Ditz.Graph.blocks_adjacency issues) root.id
+              with Not_found -> []
+            in
             Fmt.pr {|{"id":"%s","blocks":%s,"blocked_by":%s,"transitively_blocks":%s}@.|}
               (Ditz.Types.escape_json_string root.id)
-              (lst root.blocks) (lst root.blocked_by)
+              (lst (List.sort compare direct_blocks)) (lst root.blocked_by)
               (lst (Ditz.Graph.transitively_blocks_list issues root.id))
           end else begin
             let adj = Ditz.Graph.blocks_adjacency issues in

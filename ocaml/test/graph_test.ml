@@ -94,6 +94,15 @@ let () =
    | [ c ] -> assert (List.sort compare c = ["a"; "b"])
    | other -> failwith (Printf.sprintf "expected one cycle, got %d" (List.length other)));
   assert (Graph.find_cycles abc = []);
+  (* self-loop is a 1-node cycle *)
+  (match Graph.find_cycles [ mk "s" ~blocked_by:["s"] ] with
+   | [ ["s"] ] -> () | _ -> failwith "expected self-loop cycle");
+  (* a diamond is NOT a cycle (no false positive) *)
+  assert (Graph.find_cycles diamond = []);
+  (* two disjoint cycles -> two components *)
+  let two = [ mk "p" ~blocked_by:["q"]; mk "q" ~blocked_by:["p"];
+              mk "r" ~blocked_by:["t"]; mk "t" ~blocked_by:["r"] ] in
+  assert (List.length (Graph.find_cycles two) = 2);
   print_endline "PASS: find_cycles";
 
   (* dangling_refs: blocked_by an unknown id is reported; clean graph isn't. *)
