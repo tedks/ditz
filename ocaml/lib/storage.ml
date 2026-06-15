@@ -278,8 +278,10 @@ let issue_path dir id =
   | Error _ as e -> e
   | Ok safe_id -> Ok (Filename.concat dir (Printf.sprintf "issue-%s.yaml" safe_id))
 
-let find_issue_by_id dir id_prefix =
-  let issues = load_issues dir in
+(* Prefix resolution over an already-loaded issue list. Callers that need the
+   list anyway (e.g. `blocks`, which also runs the cycle check) resolve against
+   one load instead of one per lookup. *)
+let find_issue_by_id_in issues id_prefix =
   let matches = List.filter (fun (issue : issue) ->
     String.length issue.id >= String.length id_prefix &&
     String.sub issue.id 0 (String.length id_prefix) = id_prefix
@@ -290,6 +292,9 @@ let find_issue_by_id dir id_prefix =
   | _ ->
     let ids = List.map (fun (i : issue) -> i.id) matches in
     Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids)))
+
+let find_issue_by_id dir id_prefix =
+  find_issue_by_id_in (load_issues dir) id_prefix
 
 let find_issue_by_exact_id dir id =
   match detect_backend () with

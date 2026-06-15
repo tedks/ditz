@@ -645,15 +645,29 @@ let blocks_cmd =
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
-      (* Find both issues *)
-      match Ditz.Storage.find_issue_by_id config.issue_dir blocker_id with
+      (* Load the tracker once: both id lookups and the cycle check resolve
+         against the same snapshot (was three loads). *)
+      let all = Ditz.Storage.load_issues config.issue_dir in
+      match Ditz.Storage.find_issue_by_id_in all blocker_id with
       | Error (`Msg e) ->
         Fmt.epr "Error finding blocker: %s@." e; 1
       | Ok blocker ->
-        match Ditz.Storage.find_issue_by_id config.issue_dir blocked_id with
+        match Ditz.Storage.find_issue_by_id_in all blocked_id with
         | Error (`Msg e) ->
           Fmt.epr "Error finding blocked: %s@." e; 1
         | Ok blocked ->
+          (* L1: refuse an edge that would close a dependency cycle. The
+             traversal underlying ready-ordering is cycle-SAFE, but a cycle is
+             still a nonsense state ("each waits on the other"), so we prevent
+             it at the CLI rather than silently store it. (Hand-edit/sync can
+             still introduce one; `deps --check` catches those.) *)
+          if Ditz.Graph.blocks_would_cycle all
+               ~blocker:blocker.id ~blocked:blocked.id then begin
+            Fmt.epr "Error: %s blocks %s would create a dependency cycle (%s already \
+                     blocks %s, directly or transitively). Run 'ditz deps --check'.@."
+              blocker.id blocked.id blocked.id blocker.id;
+            1
+          end else
           (* Update both issues *)
           let blocker = Ditz.Issue_ops.add_blocks blocker ~blocked_id:blocked.id ~who:config.name in
           let blocked = Ditz.Issue_ops.add_blocked_by blocked ~blocker_id:blocker.id ~who:config.name in
@@ -675,6 +689,102 @@ let blocks_cmd =
               0
   in
   Cmd.v info Term.(const run $ blocker_arg $ blocked_arg $ json_flag $ quiet_flag $ setup_log_term)
+
+(* L2: inspect/validate the dependency graph. The graph is already plain text
+   in the files (grep/jq); deps renders and validates it over the same Graph
+   traversal that powers ready-ordering — it is NOT stored state. The rendered
+   tree is a pull command, deliberately kept out of `context`. *)
+let deps_cmd =
+  let doc = "Inspect and validate the dependency graph" in
+  let info = Cmd.info "deps" ~doc in
+  let id_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Show the blocks-subtree rooted at this issue") in
+  let check_flag = Arg.(value & flag & info ["check"] ~doc:"Validate the whole graph (cycles, dangling refs, one-sided edges); nonzero exit on problems") in
+  let dot_flag = Arg.(value & flag & info ["dot"] ~doc:"Emit the whole graph as Graphviz DOT") in
+  let run id check dot json () =
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      let issues = Ditz.Storage.load_issues config.issue_dir in
+      let title_of id =
+        match List.find_opt (fun (i : Ditz.Types.issue) -> i.id = id) issues with
+        | Some i -> i.title | None -> "(unknown)"
+      in
+      if dot then begin
+        (* Whole-graph DOT: edges blocker -> blocked, from blocked_by. *)
+        let esc s = Ditz.Types.escape_json_string s in
+        Fmt.pr "digraph ditz {@.";
+        List.iter (fun (i : Ditz.Types.issue) ->
+          Fmt.pr "  \"%s\" [label=\"%s\"];@." (esc i.id) (esc i.title)) issues;
+        List.iter (fun (i : Ditz.Types.issue) ->
+          List.iter (fun a -> Fmt.pr "  \"%s\" -> \"%s\";@." (esc a) (esc i.id)) i.blocked_by)
+          issues;
+        Fmt.pr "}@.";
+        0
+      end
+      else if check || id = None then begin
+        let cycles = Ditz.Graph.find_cycles issues in
+        let dangling = Ditz.Graph.dangling_refs issues in
+        let one_sided = Ditz.Graph.one_sided_edges issues in
+        let clean = cycles = [] && dangling = [] && one_sided = [] in
+        if json then begin
+          (* Each "cycle" is a strongly-connected component — a SET of mutually
+             reachable ids, not an ordered path; the key name says so. *)
+          let cyc_json = String.concat "," (List.map (fun c ->
+            "[" ^ String.concat "," (List.map (fun x -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string x)) c) ^ "]") cycles) in
+          let dang_json = String.concat "," (List.map (fun (i, m, rel) ->
+            Printf.sprintf {|{"issue":"%s","missing":"%s","relation":"%s"}|}
+              (Ditz.Types.escape_json_string i) (Ditz.Types.escape_json_string m) rel) dangling) in
+          let os_json = String.concat "," (List.map (fun (a, b) ->
+            Printf.sprintf {|{"blocker":"%s","blocked":"%s"}|}
+              (Ditz.Types.escape_json_string a) (Ditz.Types.escape_json_string b)) one_sided) in
+          Fmt.pr {|{"ok":%b,"cyclic_components":[%s],"dangling":[%s],"one_sided":[%s]}@.|}
+            clean cyc_json dang_json os_json
+        end else if clean then
+          Fmt.pr "Dependency graph OK (%d issues, no cycles/dangling/one-sided edges).@."
+            (List.length issues)
+        else begin
+          List.iter (fun c -> Fmt.pr "CYCLE (mutually blocking): %s@." (String.concat ", " c)) cycles;
+          List.iter (fun (i, m, rel) -> Fmt.pr "DANGLING: %s %s %s (no such issue)@." i rel m) dangling;
+          List.iter (fun (a, b) -> Fmt.pr "ONE-SIDED: %s blocks %s recorded on only one side@." a b) one_sided
+        end;
+        if clean then 0 else 1
+      end
+      else begin
+        (* deps <id>: blocks-subtree (downstream) rooted at id *)
+        let id = Option.get id in
+        match Ditz.Storage.find_issue_by_id config.issue_dir id with
+        | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
+        | Ok root ->
+          if json then begin
+            let lst l = "[" ^ String.concat "," (List.map (fun x -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string x)) l) ^ "]" in
+            (* direct_blocks derived from the authoritative blocked_by adjacency
+               (not the stored reciprocal blocks field), so all three views
+               agree even on one-sided data. *)
+            let direct_blocks =
+              try Hashtbl.find (Ditz.Graph.blocks_adjacency issues) root.id
+              with Not_found -> []
+            in
+            Fmt.pr {|{"id":"%s","blocks":%s,"blocked_by":%s,"transitively_blocks":%s}@.|}
+              (Ditz.Types.escape_json_string root.id)
+              (lst (List.sort compare direct_blocks)) (lst root.blocked_by)
+              (lst (Ditz.Graph.transitively_blocks_list issues root.id))
+          end else begin
+            let adj = Ditz.Graph.blocks_adjacency issues in
+            let rec walk depth path id =
+              let indent = String.make (depth * 2) ' ' in
+              if List.mem id path then Fmt.pr "%s%s (cycle)@." indent id
+              else begin
+                Fmt.pr "%s%s: %s@." indent id (title_of id);
+                let succs = try Hashtbl.find adj id with Not_found -> [] in
+                List.iter (walk (depth + 1) (id :: path)) (List.sort compare succs)
+              end
+            in
+            walk 0 [] root.id
+          end;
+          0
+      end
+  in
+  Cmd.v info Term.(const run $ id_arg $ check_flag $ dot_flag $ json_flag $ setup_log_term)
 
 (* Unblocks command - remove blocking relationship *)
 let unblocks_cmd =
@@ -1023,6 +1133,7 @@ let main_cmd =
     comment_cmd;
     blocks_cmd;
     unblocks_cmd;
+    deps_cmd;
     ref_cmd;
     set_cmd;
     search_cmd;

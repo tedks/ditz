@@ -24,7 +24,7 @@ cd "$work"
 # Every subcommand must at least construct its term (--help) without crashing.
 # This is what would have caught the -q/log-verbosity duplicate-flag crash.
 for sub in list add init show close reopen start stop drop context ready \
-           comment blocks unblocks ref set search assign unassign status sync; do
+           comment blocks unblocks deps ref set search assign unassign status sync; do
   out="$("$BIN" "$sub" --help 2>&1)"; rc=$?
   check "$sub --help constructs" 0 "$rc"
 done
@@ -65,6 +65,76 @@ out="$("$BIN" set "$id" --status bogus 2>&1)"; check "set --status bogus rejecte
 "$BIN" close "$id" --fixed >/dev/null 2>&1
 rj="$("$BIN" ready --json 2>/dev/null)"
 case "$rj" in \[*\]) echo "ok: ready --json is a clean array";; *) echo "FAIL: ready --json not clean: $rj"; fail=1;; esac
+
+# Step 3: deps command + L1 cycle prevention
+"$BIN" add "dep a" --id da --ids-only >/dev/null
+"$BIN" add "dep b" --id db --ids-only >/dev/null
+"$BIN" add "dep c" --id dc --ids-only >/dev/null
+"$BIN" blocks da db >/dev/null 2>&1; "$BIN" blocks db dc >/dev/null 2>&1   # da->db->dc
+out="$("$BIN" blocks dc da 2>&1)"; check "L1 refuses cycle-closing edge" 1 "$?"
+contains "cycle refusal explains" "cycle" "$out"
+out="$("$BIN" blocks da da 2>&1)"; check "L1 refuses self-block" 1 "$?"
+contains "deps subtree shows chain" "dc" "$("$BIN" deps da)"
+"$BIN" deps --check >/dev/null 2>&1; check "deps --check clean exits 0" 0 "$?"
+contains "deps --json has transitively_blocks" "transitively_blocks" "$("$BIN" deps da --json)"
+contains "deps --dot emits digraph" "digraph ditz" "$("$BIN" deps --dot)"
+
+# deps --check DETECTS a hand-edited bad graph (dangling ref) and exits nonzero.
+# Cycles can't be made via the CLI (L1), so write a bad issue file directly.
+cat > .ditz/issue-bad1.yaml <<'YAML'
+id: bad1
+title: Bad
+desc: ""
+type: task
+component: default
+release:
+reporter: S <s@e.co>
+status: unstarted
+disposition:
+creation_time: 2026-06-15T00:00:00Z
+references: []
+log_events: []
+blocked_by:
+- nonexistent-id
+YAML
+out="$("$BIN" deps --check 2>&1)"; check "deps --check flags bad graph" 1 "$?"
+contains "deps --check reports dangling" "DANGLING" "$out"
+contains "deps --check --json not ok" '"ok":false' "$("$BIN" deps --check --json)"
+
+# A real cycle can't be made via the CLI (L1), so write a reciprocal pair
+# directly. This covers the CYCLE branch, the ASCII-tree cycle marking, and
+# tree termination — branches L1 otherwise hides from dune runtest.
+for n in ca cb; do
+  other=$([ "$n" = ca ] && echo cb || echo ca)
+  cat > ".ditz/issue-$n.yaml" <<YAML
+id: $n
+title: cycle $n
+desc: ""
+type: task
+component: default
+release:
+reporter: S <s@e.co>
+status: unstarted
+disposition:
+creation_time: 2026-06-15T00:00:00Z
+references: []
+log_events: []
+blocks:
+- $other
+blocked_by:
+- $other
+YAML
+done
+out="$("$BIN" deps --check 2>&1)"; check "deps --check flags cycle" 1 "$?"
+contains "deps --check reports CYCLE" "CYCLE (mutually blocking)" "$out"
+contains "deps --check --json cyclic_components" "cyclic_components" "$("$BIN" deps --check --json)"
+tree="$("$BIN" deps ca 2>&1)"; check "deps on a cycle terminates" 0 "$?"
+contains "deps tree marks cycle" "(cycle)" "$tree"
+out="$("$BIN" deps no-such-id 2>&1)"; check "deps missing id errors" 1 "$?"
+
+# --dot escapes quotes in titles
+"$BIN" add 'evil "q" title' --id evilq --ids-only >/dev/null
+contains "deps --dot escapes quotes" '\"q\"' "$("$BIN" deps --dot)"
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

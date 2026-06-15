@@ -77,4 +77,49 @@ let () =
   assert (s "ghost" = 2);    (* ghost (unknown) transitively unblocks a then b *)
   print_endline "PASS: dangling target tolerated";
 
+  (* ---- integrity checks (L1/L2) ---- *)
+
+  (* blocks_would_cycle: a->b->c exists; c blocks a closes a loop; self too;
+     an existing edge adds no new cycle; an unrelated node doesn't. *)
+  let abc = [ mk "a"; mk "b" ~blocked_by:["a"]; mk "c" ~blocked_by:["b"] ] in
+  assert (Graph.blocks_would_cycle abc ~blocker:"c" ~blocked:"a");
+  assert (Graph.blocks_would_cycle abc ~blocker:"a" ~blocked:"a");
+  assert (not (Graph.blocks_would_cycle abc ~blocker:"a" ~blocked:"c"));
+  assert (not (Graph.blocks_would_cycle (mk "d" :: abc) ~blocker:"d" ~blocked:"a"));
+  print_endline "PASS: blocks_would_cycle";
+
+  (* find_cycles: a<->b is a cycle; the acyclic chain has none. *)
+  let cyc = [ mk "a" ~blocked_by:["b"]; mk "b" ~blocked_by:["a"]; mk "x" ] in
+  (match Graph.find_cycles cyc with
+   | [ c ] -> assert (List.sort compare c = ["a"; "b"])
+   | other -> failwith (Printf.sprintf "expected one cycle, got %d" (List.length other)));
+  assert (Graph.find_cycles abc = []);
+  (* self-loop is a 1-node cycle *)
+  (match Graph.find_cycles [ mk "s" ~blocked_by:["s"] ] with
+   | [ ["s"] ] -> () | _ -> failwith "expected self-loop cycle");
+  (* a diamond is NOT a cycle (no false positive) *)
+  assert (Graph.find_cycles diamond = []);
+  (* two disjoint cycles -> two components *)
+  let two = [ mk "p" ~blocked_by:["q"]; mk "q" ~blocked_by:["p"];
+              mk "r" ~blocked_by:["t"]; mk "t" ~blocked_by:["r"] ] in
+  assert (List.length (Graph.find_cycles two) = 2);
+  print_endline "PASS: find_cycles";
+
+  (* dangling_refs: blocked_by an unknown id is reported; clean graph isn't. *)
+  (match Graph.dangling_refs [ mk "a" ~blocked_by:["ghost"] ] with
+   | [ ("a", "ghost", "blocked_by") ] -> ()
+   | _ -> failwith "expected one dangling blocked_by ref");
+  assert (Graph.dangling_refs abc = []);
+  print_endline "PASS: dangling_refs";
+
+  (* one_sided_edges: a.blocks=[b] but b.blocked_by lacks a -> reported. A
+     fully reciprocal pair (both sides recorded, as the `blocks` command keeps
+     them) is clean. NB: `mk` sets only blocked_by, so abc is itself one-sided
+     by construction — exactly what this check flags. *)
+  let one_sided = [ { (mk "a") with Types.blocks = ["b"] }; mk "b" ] in
+  assert (Graph.one_sided_edges one_sided = [ ("a", "b") ]);
+  let reciprocal = [ { (mk "a") with Types.blocks = ["b"] }; mk "b" ~blocked_by:["a"] ] in
+  assert (Graph.one_sided_edges reciprocal = []);
+  print_endline "PASS: one_sided_edges";
+
   print_endline "\nAll graph tests passed!"
