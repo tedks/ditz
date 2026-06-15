@@ -19,8 +19,10 @@ type bead = {
   priority : int option;
   itype : string;
   owner : string option;
+  assignee : string option;
   created_by : string option;
   created_at : string option;
+  updated_at : string option;
   closed_at : string option;
   close_reason : string option;
   external_ref : string option;
@@ -57,37 +59,42 @@ let str_list_field kvs k =
    We keep only type="blocks" edges as graph blockers; other types
    (related/parent-child/discovered-from) are surfaced as provenance, not
    silently turned into blocking edges with a guessed direction. Returns
-   (blockers, other_deps). *)
+   (blockers, other_deps, warnings) — a present-but-malformed `dependencies`
+   field warns rather than vanishing, since a dropped edge is real data loss. *)
 let parse_deps kvs =
   match List.assoc_opt "dependencies" kvs with
+  | None | Some `Null -> ([], [], [])
   | Some (`A items) ->
     List.fold_left
-      (fun (blk, other) item ->
+      (fun (blk, other, warns) item ->
         let f = fields item in
         match str_field f "type", str_field f "depends_on_id" with
-        | Some "blocks", Some dep -> (dep :: blk, other)
-        | Some t, Some dep -> (blk, (t, dep) :: other)
-        | _ -> (blk, other))
-      ([], []) items
-    |> fun (blk, other) -> (List.rev blk, List.rev other)
-  | _ -> ([], [])
+        | Some "blocks", Some dep -> (dep :: blk, other, warns)
+        | Some t, Some dep -> (blk, (t, dep) :: other, warns)
+        | _ -> (blk, other, "dependency entry missing type/depends_on_id" :: warns))
+      ([], [], []) items
+    |> fun (blk, other, w) -> (List.rev blk, List.rev other, List.rev w)
+  | Some _ -> ([], [], [ "`dependencies` is not an array; dependencies ignored" ])
 
-let bead_of_yaml (y : Yaml.value) : (bead, string) result =
+(* Returns the bead plus any field-level warnings (e.g. malformed deps). *)
+let bead_of_yaml (y : Yaml.value) : (bead * string list, string) result =
   let kvs = fields y in
   match str_field kvs "id", str_field kvs "title" with
   | None, _ -> Error "line has no string id"
   | _, None -> Error "line has no string title"
   | Some id, Some title ->
-    let blockers, other_deps = parse_deps kvs in
-    Ok {
+    let blockers, other_deps, dep_warns = parse_deps kvs in
+    Ok ({
       id; title;
       desc = Option.value (str_field kvs "description") ~default:"";
       status = Option.value (str_field kvs "status") ~default:"open";
       priority = int_field kvs "priority";
       itype = Option.value (str_field kvs "issue_type") ~default:"task";
       owner = str_field kvs "owner";
+      assignee = str_field kvs "assignee";
       created_by = str_field kvs "created_by";
       created_at = str_field kvs "created_at";
+      updated_at = str_field kvs "updated_at";
       closed_at = str_field kvs "closed_at";
       close_reason = str_field kvs "close_reason";
       external_ref = str_field kvs "external_ref";
@@ -95,7 +102,7 @@ let bead_of_yaml (y : Yaml.value) : (bead, string) result =
       notes = str_field kvs "notes";
       blockers;
       other_deps;
-    }
+    }, List.map (Printf.sprintf "%s: %s" id) dep_warns)
 
 (** Parse JSONL. Returns (beads, warnings); a bad line is a warning, not fatal. *)
 let parse_jsonl (text : string) : bead list * string list =
@@ -108,11 +115,44 @@ let parse_jsonl (text : string) : bead list * string list =
         | Error (`Msg e) -> (beads, Printf.sprintf "line %d: YAML/JSON parse error: %s" lineno e :: warns)
         | Ok y ->
           (match bead_of_yaml y with
-           | Ok b -> (b :: beads, warns)
+           | Ok (b, field_warns) ->
+             (b :: beads,
+              List.rev_append (List.map (Printf.sprintf "line %d: %s" lineno) field_warns) warns)
            | Error e -> (beads, Printf.sprintf "line %d: %s" lineno e :: warns)))
     ([], [])
     (List.mapi (fun i l -> (i + 1, l)) lines)
   |> fun (beads, warns) -> (List.rev beads, List.rev warns)
+
+(** Drop in-file duplicate ids (keep first), warning distinctly so a second
+    record with different content isn't confused with a benign "already in the
+    tracker" skip. *)
+let dedup (beads : bead list) : bead list * string list =
+  let seen = Hashtbl.create (List.length beads) in
+  List.fold_left
+    (fun (kept, warns) b ->
+      if Hashtbl.mem seen b.id then
+        (kept, Printf.sprintf "duplicate id '%s' in input — kept first, dropped a later record" b.id :: warns)
+      else (Hashtbl.add seen b.id (); (b :: kept, warns)))
+    ([], []) beads
+  |> fun (kept, warns) -> (List.rev kept, List.rev warns)
+
+(** Drop dependency endpoint ids that aren't valid ditz ids (e.g. dotted),
+    warning per drop — they can't be real cross-references and would otherwise
+    be guaranteed dangling refs. [valid] is the id predicate (Storage.validate_id).
+    Non-"blocks" deps (other_deps) are provenance strings, left as-is. *)
+let sanitize_edges ~valid (beads : bead list) : bead list * string list =
+  List.fold_left
+    (fun (acc, warns) b ->
+      let good, bad = List.partition valid b.blockers in
+      let warns =
+        List.fold_left
+          (fun w bad_id ->
+            Printf.sprintf "%s: dropped blocking edge to invalid id '%s'" b.id bad_id :: w)
+          warns bad
+      in
+      ({ b with blockers = good } :: acc, warns))
+    ([], []) beads
+  |> fun (acc, warns) -> (List.rev acc, List.rev warns)
 
 (* ---- mapping to ditz ---- *)
 
@@ -141,12 +181,17 @@ let to_issue ~reporter_fallback ~blocks (b : bead) : issue =
   in
   let created_at = Option.value b.created_at ~default:(Issue_ops.now_rfc3339 ()) in
   let status = status_of_beads b.status in
+  (* beads has no structured resolution field (only free-text close_reason),
+     so every closed issue maps to Fixed; the reason text carries any nuance. *)
   let disposition = if status = Closed then Some Fixed else None in
   (* Provenance for things ditz has no field for, so nothing is silently lost. *)
+  (* Everything ditz has no field for, kept auditable rather than dropped. *)
   let provenance =
     List.filter_map (fun x -> x)
       [ Option.map (Printf.sprintf "priority=%d") b.priority;
         (if b.labels = [] then None else Some ("labels=" ^ String.concat "," b.labels));
+        Option.map (Printf.sprintf "assignee=%s") b.assignee;
+        Option.map (Printf.sprintf "updated_at=%s") b.updated_at;
         (if b.other_deps = [] then None
          else Some ("deps=" ^ String.concat "," (List.map (fun (t, d) -> t ^ ":" ^ d) b.other_deps))) ]
   in

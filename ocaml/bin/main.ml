@@ -1136,13 +1136,17 @@ let import_cmd =
           (try Ditz.Fs_util.read_file path
            with Sys_error e -> Fmt.epr "Error reading %s: %s@." path e; exit 1)
       in
-      let beads, warnings = Ditz.Import_beads.parse_jsonl text in
+      let beads, parse_warns = Ditz.Import_beads.parse_jsonl text in
+      (* Drop in-file duplicate ids (keep first), then drop dependency edges
+         whose endpoint id ditz can't store — both with distinct warnings. *)
+      let beads, dup_warns = Ditz.Import_beads.dedup beads in
+      let valid id = Result.is_ok (Ditz.Storage.validate_id id) in
+      let beads, edge_warns = Ditz.Import_beads.sanitize_edges ~valid beads in
       let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
       let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
-      (* Pass 1: validate ids. An id ditz can't store safely (e.g. containing
-         a '.') is skipped with a warning rather than silently mangled — it
-         would break cross-references. *)
-      let warnings = ref warnings in
+      (* Issue ids ditz can't store safely (e.g. containing a '.') are skipped
+         with a warning rather than silently mangled. *)
+      let warnings = ref (parse_warns @ dup_warns @ edge_warns) in
       let created = ref [] and skipped = ref [] in
       List.iter
         (fun (b : Ditz.Import_beads.bead) ->

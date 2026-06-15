@@ -73,4 +73,58 @@ not json at all
   ignore last_what;
   print_endline "PASS: reporter fallback";
 
+  (* ---- council hardening ---- *)
+
+  (* dedup: a duplicate id in one file is dropped (first kept) with a warning *)
+  let dup_text =
+    {|{"id":"d-1","title":"first","status":"open"}
+{"id":"d-1","title":"second different","status":"closed"}
+{"id":"d-2","title":"other","status":"open"}|}
+  in
+  let dbeads, _ = Import_beads.parse_jsonl dup_text in
+  let deduped, dwarns = Import_beads.dedup dbeads in
+  assert (List.length deduped = 2);
+  assert (List.length dwarns = 1);
+  assert ((List.nth deduped 0).Import_beads.title = "first");  (* first kept *)
+  print_endline "PASS: dedup keeps first, warns on duplicate id";
+
+  (* sanitize_edges: a blocking edge to an invalid (dotted) id is dropped + warned *)
+  let valid id = String.for_all (function
+    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' | '_' -> true | _ -> false) id && id <> "" in
+  let bad_edge = { b1 with Import_beads.blockers = ["good-1"; "bad.id"] } in
+  let sed, swarns = Import_beads.sanitize_edges ~valid [bad_edge] in
+  assert ((List.hd sed).Import_beads.blockers = ["good-1"]);
+  assert (List.length swarns = 1);
+  print_endline "PASS: sanitize_edges drops invalid endpoint, warns";
+
+  (* malformed `dependencies` (not an array) warns rather than vanishing *)
+  let mal_text = {|{"id":"m-1","title":"t","dependencies":"oops"}|} in
+  let _, mwarns = Import_beads.parse_jsonl mal_text in
+  assert (List.exists (fun w ->
+    let contains hay nee = let hl=String.length hay and nl=String.length nee in
+      let rec go i = i+nl<=hl && (String.sub hay i nl = nee || go (i+1)) in go 0 in
+    contains w "not an array") mwarns);
+  print_endline "PASS: malformed dependencies warns";
+
+  (* updated_at + assignee survive as provenance (the "nothing lost" promise) *)
+  let prov_text =
+    {|{"id":"pr-1","title":"t","status":"open","updated_at":"2026-03-03T00:00:00Z","assignee":"alice"}|}
+  in
+  let pbeads, _ = Import_beads.parse_jsonl prov_text in
+  let pi = Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] (List.hd pbeads) in
+  (match find_ev pi "imported from beads" with
+   | Some e ->
+     let has s = let hl=String.length e.Types.comment and nl=String.length s in
+       let rec go i = i+nl<=hl && (String.sub e.Types.comment i nl = s || go (i+1)) in go 0 in
+     assert (has "assignee=alice"); assert (has "updated_at=2026-03-03T00:00:00Z")
+   | None -> failwith "expected provenance with assignee + updated_at");
+  print_endline "PASS: updated_at + assignee preserved as provenance";
+
+  (* escaped newline in a description stays one physical line / one issue *)
+  let nl_text = {|{"id":"n-1","title":"t","description":"line1\nline2\nline3","status":"open"}|} in
+  let nbeads, nwarns = Import_beads.parse_jsonl nl_text in
+  assert (List.length nbeads = 1 && nwarns = []);
+  assert ((List.hd nbeads).Import_beads.desc = "line1\nline2\nline3");
+  print_endline "PASS: escaped newline in description";
+
   print_endline "\nAll import_beads tests passed!"
