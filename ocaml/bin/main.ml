@@ -558,20 +558,36 @@ let ready_cmd =
           StringSet.mem blocked_by_id open_ids
         ) issue.blocked_by)
       ) all_issues in
+      (* 7.4: order by graph leverage — how many open issues each transitively
+         unblocks (descending) — then oldest-first, then id for stability.
+         Score is computed once per ready issue (the comparator must not
+         recompute the DFS). On a flat graph every score is 0 and this reduces
+         to oldest-first (the documented blind spot for urgent-but-unblocking
+         work). *)
+      let score = Ditz.Graph.unblock_score all_issues in
+      let scored = List.map (fun (i : Ditz.Types.issue) -> (i, score i.id)) ready_issues in
+      let scored = List.sort (fun (a, sa) (b, sb) ->
+        if sa <> sb then compare sb sa
+        else
+          let t = compare a.Ditz.Types.creation_time b.Ditz.Types.creation_time in
+          if t <> 0 then t else compare a.Ditz.Types.id b.Ditz.Types.id
+      ) scored in
+      let ready_issues = List.map fst scored in
       (match mode with
        | Json ->
          Fmt.pr "%s@." (Ditz.Types.issues_to_json ready_issues)
        | Quiet ->
          List.iter (fun (i : Ditz.Types.issue) -> Fmt.pr "%s@." i.id) ready_issues
        | Human ->
-         if ready_issues = [] then
+         if scored = [] then
            Fmt.pr "No issues ready to work on.@."
          else begin
-           Fmt.pr "Ready to work on (%d issues):@.@." (List.length ready_issues);
-           List.iter (fun (issue : Ditz.Types.issue) ->
+           Fmt.pr "Ready to work on (%d issues):@.@." (List.length scored);
+           List.iter (fun ((issue : Ditz.Types.issue), s) ->
              let widget = Ditz.Types.status_widget issue.status in
-             Fmt.pr "[%s] %s: %s@." widget issue.id issue.title
-           ) ready_issues
+             let unblocks = if s > 0 then Printf.sprintf " (unblocks %d)" s else "" in
+             Fmt.pr "[%s] %s: %s%s@." widget issue.id issue.title unblocks
+           ) scored
          end);
       0
   in
