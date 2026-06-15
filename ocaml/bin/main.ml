@@ -119,28 +119,46 @@ let add_cmd =
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
-      let desc = match (desc, desc_stdin) with
-        | (Some d, false) -> d
-        | (None, true) -> read_stdin ()
-        | (Some d, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; d
-        | (None, false) -> ""
+      (* Idempotent fast path FIRST: with an explicit --id, an existing issue
+         is returned unchanged. This must precede creation-only validation
+         (--type) and any stdin read, so a no-op re-add never fails on a bad
+         creation flag or blocks on stdin. *)
+      let existing = match custom_id with
+        | Some id ->
+          (match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
+           | Ok e -> Some e | Error _ -> None)
+        | None -> None
       in
-      let issue_type_result = match type_str with
-        | None -> Ok Ditz.Types.Task
-        | Some t ->
-          (match issue_type_of_string t with
-           | Some ty -> Ok ty
-           | None -> Error (Printf.sprintf "unknown type '%s' (use bugfix, feature, task)" t))
-      in
-      match issue_type_result with
-      | Error e -> Fmt.epr "Error: %s@." e; 1
-      | Ok issue_type ->
-        let component = Option.value component ~default:"default" in
-        let id = match custom_id with
-          | Some id -> id
-          | None -> Ditz.Types.make_id ~title ~desc ~reporter:config.name
+      match existing with
+      | Some existing ->
+        (match mode with
+         | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
+         | Quiet -> Fmt.pr "%s@." existing.id
+         | Human -> Fmt.pr "Issue %s already exists@." existing.id);
+        0
+      | None ->
+        (* Creating: now resolve description and validate creation-only fields. *)
+        let desc = match (desc, desc_stdin) with
+          | (Some d, false) -> d
+          | (None, true) -> read_stdin ()
+          | (Some d, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; d
+          | (None, false) -> ""
         in
-        let create_and_save () =
+        let issue_type_result = match type_str with
+          | None -> Ok Ditz.Types.Task
+          | Some t ->
+            (match issue_type_of_string t with
+             | Some ty -> Ok ty
+             | None -> Error (Printf.sprintf "unknown type '%s' (use bugfix, feature, task)" t))
+        in
+        match issue_type_result with
+        | Error e -> Fmt.epr "Error: %s@." e; 1
+        | Ok issue_type ->
+          let component = Option.value component ~default:"default" in
+          let id = match custom_id with
+            | Some id -> id
+            | None -> Ditz.Types.make_id ~title ~desc ~reporter:config.name
+          in
           let issue = Ditz.Issue_ops.new_issue ~id ~title ~desc ~issue_type ~component
             ~reporter:(Printf.sprintf "%s <%s>" config.name config.email)
             ~who:config.name in
@@ -153,20 +171,6 @@ let add_cmd =
             0
           | Error (`Msg e) ->
             Fmt.epr "Error: %s@." e; 1
-        in
-        (* Idempotent: with an explicit --id, an existing issue is returned
-           unchanged (the metadata flags do not update it). *)
-        match custom_id with
-        | Some _ ->
-          (match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
-           | Ok existing ->
-             (match mode with
-              | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
-              | Quiet -> Fmt.pr "%s@." existing.id
-              | Human -> Fmt.pr "Issue %s already exists@." existing.id);
-             0
-           | Error _ -> create_and_save ())
-        | None -> create_and_save ()
   in
   Cmd.v info Term.(const run $ title_arg $ id_opt $ type_opt $ component_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 

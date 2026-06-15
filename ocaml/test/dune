@@ -2,6 +2,13 @@
  (name lifecycle_test)
  (libraries ditz))
 
+; CLI-eval smoke test: drives the built binary (cmdliner term construction,
+; flag wiring, exit codes) which the pure library tests never exercise.
+(rule
+ (alias runtest)
+ (deps cli_test.sh %{exe:../bin/main.exe})
+ (action (run bash cli_test.sh %{exe:../bin/main.exe})))
+
 (test
  (name id_prefix_test)
  (libraries ditz unix))
