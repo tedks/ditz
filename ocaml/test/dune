@@ -56,3 +56,7 @@
 (test
  (name graph_test)
  (libraries ditz))
+
+(test
+ (name import_beads_test)
+ (libraries ditz yaml))

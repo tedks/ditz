@@ -1115,6 +1115,68 @@ let sync_cmd =
   in
   Cmd.v info Term.(const run $ pull_only $ push_only $ setup_log_term)
 
+let import_cmd =
+  let doc = "Import issues from a beads `bd export` JSONL file" in
+  let info = Cmd.info "import" ~doc in
+  let file_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"FILE" ~doc:"JSONL file ('-' or omitted = stdin)") in
+  let format_opt = Arg.(value & opt string "beads" & info ["format"] ~docv:"FMT" ~doc:"Source format (only 'beads' supported)") in
+  let run file format json quiet () =
+    let mode = output_mode json quiet in
+    if format <> "beads" then begin
+      Fmt.epr "Error: unknown import format '%s' (only 'beads' is supported)@." format; 1
+    end else
+    match Ditz.Storage.load_config () with
+    | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
+    | Ok config ->
+      (* Read JSONL from the file or stdin. *)
+      let text =
+        match file with
+        | None | Some "-" -> read_stdin ()
+        | Some path ->
+          (try Ditz.Fs_util.read_file path
+           with Sys_error e -> Fmt.epr "Error reading %s: %s@." path e; exit 1)
+      in
+      let beads, warnings = Ditz.Import_beads.parse_jsonl text in
+      let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
+      let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
+      (* Pass 1: validate ids. An id ditz can't store safely (e.g. containing
+         a '.') is skipped with a warning rather than silently mangled — it
+         would break cross-references. *)
+      let warnings = ref warnings in
+      let created = ref [] and skipped = ref [] in
+      List.iter
+        (fun (b : Ditz.Import_beads.bead) ->
+          match Ditz.Storage.validate_id b.id with
+          | Error (`Msg e) -> warnings := Printf.sprintf "skipped %s: %s" b.id e :: !warnings
+          | Ok _ ->
+            (* Idempotent: an existing issue is left untouched. *)
+            (match Ditz.Storage.find_issue_by_exact_id config.issue_dir b.id with
+             | Ok _ -> skipped := b.id :: !skipped
+             | Error _ ->
+               let blocks = try Hashtbl.find reciprocal b.id with Not_found -> [] in
+               let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks b in
+               (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
+                        config.issue_dir issue with
+                | Ok () -> created := b.id :: !created
+                | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings)))
+        beads;
+      let created = List.rev !created and skipped = List.rev !skipped in
+      let warnings = List.rev !warnings in
+      (match mode with
+       | Json ->
+         let lst l = "[" ^ String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string s)) l) ^ "]" in
+         Fmt.pr {|{"created":%s,"skipped":%s,"warnings":%s}@.|}
+           (lst created) (lst skipped) (lst warnings)
+       | Quiet -> List.iter (fun id -> Fmt.pr "%s@." id) created
+       | Human ->
+         List.iter (fun w -> Fmt.epr "warning: %s@." w) warnings;
+         Fmt.pr "Imported %d issue(s) from beads; %d already present (skipped).@."
+           (List.length created) (List.length skipped));
+      (* Warnings alone don't fail the import; an outright read/format error did. *)
+      0
+  in
+  Cmd.v info Term.(const run $ file_arg $ format_opt $ json_flag $ quiet_flag $ setup_log_term)
+
 let main_cmd =
   let doc = "Distributed issue tracker" in
   let info = Cmd.info "ditz" ~version:"0.1.0-ocaml" ~doc in
@@ -1141,6 +1203,7 @@ let main_cmd =
     unassign_cmd;
     status_cmd;
     sync_cmd;
+    import_cmd;
   ]
 
 let () = exit (Cmd.eval' main_cmd)
