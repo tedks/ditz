@@ -74,4 +74,22 @@ let () =
   let issue = Issue_ops.unassign_release issue ~who:"Tester" in
   assert (List.length issue.Types.log_events = List.length issue_before.Types.log_events);
 
+  (* 7.3: new_issue constructs a fresh unstarted issue with a created event *)
+  let fresh = Issue_ops.new_issue ~id:"new1" ~title:"Fresh" ~desc:"a desc"
+    ~issue_type:Types.Bugfix ~component:"auth"
+    ~reporter:"R <r@example.com>" ~who:"R" in
+  assert (fresh.Types.id = "new1");
+  assert (fresh.Types.title = "Fresh");
+  assert (fresh.Types.desc = "a desc");
+  assert (fresh.Types.issue_type = Types.Bugfix);
+  assert (fresh.Types.component = "auth");
+  assert (fresh.Types.reporter = "R <r@example.com>");
+  assert (fresh.Types.status = Types.Unstarted);
+  assert (fresh.Types.disposition = None);
+  assert (fresh.Types.release = None);
+  assert (fresh.Types.blocks = [] && fresh.Types.blocked_by = [] && fresh.Types.file_refs = []);
+  (match fresh.Types.log_events with
+   | [ev] -> assert (ev.Types.what = "created"); assert (ev.Types.who = "R")
+   | _ -> failwith "expected exactly one created event");
+
   print_endline "Set fields tests passed"

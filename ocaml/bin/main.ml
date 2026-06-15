@@ -16,6 +16,9 @@ let setup_log_term =
 
 (* Common flags for output mode *)
 let json_flag = Arg.(value & flag & info ["json"] ~doc:"Output in JSON format")
+(* Quiet/ids-only output. NB: cannot alias to "-q" — that short flag is taken
+   by cmdliner's log-verbosity option (setup_log_term). --ids-only it is; the
+   onboarding doc teaches this rather than the beads -q muscle memory. *)
 let quiet_flag = Arg.(value & flag & info ["ids-only"] ~doc:"Output only issue IDs (one per line)")
 
 let output_mode json quiet =
@@ -106,100 +109,66 @@ let add_cmd =
   let info = Cmd.info "add" ~doc in
   let title_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TITLE") in
   let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"ID" ~doc:"Use specific ID (idempotent - returns existing issue if ID exists)") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Issue type (bugfix, feature, task; default task)") in
+  let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
+  let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
-  let run title custom_id desc_stdin json quiet () =
+  let run title custom_id type_str component desc desc_stdin json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
-      let desc = if desc_stdin then read_stdin () else "" in
-      let id = match custom_id with
-        | Some id -> id
-        | None -> Ditz.Types.make_id ~title ~desc ~reporter:config.name
+      let desc = match (desc, desc_stdin) with
+        | (Some d, false) -> d
+        | (None, true) -> read_stdin ()
+        | (Some d, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; d
+        | (None, false) -> ""
       in
-      (* Check if issue with this ID already exists (idempotent) *)
-      match custom_id with
-      | Some _ -> (
-        match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
-        | Ok existing ->
-          (* Issue exists, return it *)
-          (match mode with
-           | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
-           | Quiet -> Fmt.pr "%s@." existing.id
-           | Human -> Fmt.pr "Issue %s already exists@." existing.id);
-          0
-        | Error _ ->
-          (* Issue doesn't exist, create it *)
-          let now = Ditz.Issue_ops.now_rfc3339 () in
-          let issue : Ditz.Types.issue = {
-            id;
-            title;
-            desc;
-            issue_type = Ditz.Types.Task;
-            component = "default";
-            release = None;
-            reporter = Printf.sprintf "%s <%s>" config.name config.email;
-            status = Ditz.Types.Unstarted;
-            disposition = None;
-            creation_time = now;
-            references = [];
-            log_events = [{
-              time = now;
-              who = config.name;
-              what = "created";
-              comment = "";
-            }];
-            blocks = [];
-            blocked_by = [];
-            file_refs = [];
-          } in
+      let issue_type_result = match type_str with
+        | None -> Ok Ditz.Types.Task
+        | Some t ->
+          (match issue_type_of_string t with
+           | Some ty -> Ok ty
+           | None -> Error (Printf.sprintf "unknown type '%s' (use bugfix, feature, task)" t))
+      in
+      match issue_type_result with
+      | Error e -> Fmt.epr "Error: %s@." e; 1
+      | Ok issue_type ->
+        let component = Option.value component ~default:"default" in
+        let id = match custom_id with
+          | Some id -> id
+          | None -> Ditz.Types.make_id ~title ~desc ~reporter:config.name
+        in
+        let create_and_save () =
+          let issue = Ditz.Issue_ops.new_issue ~id ~title ~desc ~issue_type ~component
+            ~reporter:(Printf.sprintf "%s <%s>" config.name config.email)
+            ~who:config.name in
           match Ditz.Storage.save_issue config.issue_dir issue with
           | Ok () ->
             (match mode with
              | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
-             | Quiet -> Fmt.pr "%s@." id
-             | Human -> Fmt.pr "Created issue %s@." id);
+             | Quiet -> Fmt.pr "%s@." issue.id
+             | Human -> Fmt.pr "Created issue %s@." issue.id);
             0
           | Error (`Msg e) ->
             Fmt.epr "Error: %s@." e; 1
-      )
-      | None ->
-        (* No custom ID, always create new *)
-        let now = Ditz.Issue_ops.now_rfc3339 () in
-        let issue : Ditz.Types.issue = {
-          id;
-          title;
-          desc;
-          issue_type = Ditz.Types.Task;
-          component = "default";
-          release = None;
-          reporter = Printf.sprintf "%s <%s>" config.name config.email;
-          status = Ditz.Types.Unstarted;
-          disposition = None;
-          creation_time = now;
-          references = [];
-          log_events = [{
-            time = now;
-            who = config.name;
-            what = "created";
-            comment = "";
-          }];
-          blocks = [];
-          blocked_by = [];
-          file_refs = [];
-        } in
-        match Ditz.Storage.save_issue config.issue_dir issue with
-        | Ok () ->
-          (match mode with
-           | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json issue)
-           | Quiet -> Fmt.pr "%s@." id
-           | Human -> Fmt.pr "Created issue %s@." id);
-          0
-        | Error (`Msg e) ->
-          Fmt.epr "Error: %s@." e; 1
+        in
+        (* Idempotent: with an explicit --id, an existing issue is returned
+           unchanged (the metadata flags do not update it). *)
+        match custom_id with
+        | Some _ ->
+          (match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
+           | Ok existing ->
+             (match mode with
+              | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
+              | Quiet -> Fmt.pr "%s@." existing.id
+              | Human -> Fmt.pr "Issue %s already exists@." existing.id);
+             0
+           | Error _ -> create_and_save ())
+        | None -> create_and_save ()
   in
-  Cmd.v info Term.(const run $ title_arg $ id_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ title_arg $ id_opt $ type_opt $ component_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 
 let init_cmd =
   let doc = "Initialize a new ditz project" in

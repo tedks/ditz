@@ -20,6 +20,25 @@ let add_log_event (issue : issue) ~who ~what ~comment : issue =
   } in
   { issue with log_events = issue.log_events @ [event] }
 
+(* Construct a fresh unstarted issue with its "created" log event. Shared by
+   the `add` command and (Phase 9.1) the beads importer, so the record shape
+   lives in one place. *)
+let new_issue ~id ~title ~desc ~issue_type ~component ~reporter ~who : issue =
+  let now = now_rfc3339 () in
+  {
+    id; title; desc; issue_type; component;
+    release = None;
+    reporter;
+    status = Unstarted;
+    disposition = None;
+    creation_time = now;
+    references = [];
+    log_events = [{ time = now; who; what = "created"; comment = "" }];
+    blocks = [];
+    blocked_by = [];
+    file_refs = [];
+  }
+
 (* [comment] carries the close reason; it lands on the close log event
    (pass "" for none). Required rather than optional to keep the subject-first
    argument order all the other ops use. *)
