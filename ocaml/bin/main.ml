@@ -187,21 +187,23 @@ let onboard_cmd =
   let run json quiet () =
     let mode = output_mode json quiet in
     let path = agents_md_path () in
-    let outcome = Ditz.Onboarding.install ~path in
+    let outcome = Ditz.Onboarding.install ~within:(Ditz.Git.find_git_root ()) ~path in
+    (* dest is the file actually touched (may be a symlink's resolved target). *)
+    let ob, dest = match outcome with
+      | Ditz.Onboarding.Wrote d -> "wrote", Some d
+      | Skipped_present d -> "already-present", Some d
+      | Refused_symlink -> "refused-symlink", None
+      | Failed _ -> "failed", None
+    in
     (match mode with
      | Json ->
-       let ob = match outcome with
-         | Ditz.Onboarding.Wrote -> "wrote"
-         | Skipped_present -> "already-present"
-         | Refused_symlink -> "refused-symlink"
-         | Failed _ -> "failed"
-       in
-       Fmt.pr {|{"path":"%s","onboarding":"%s"}@.|} (Ditz.Types.escape_json_string path) ob
-     | Quiet -> (match outcome with Wrote | Skipped_present -> Fmt.pr "%s@." path | _ -> ())
+       Fmt.pr {|{"path":"%s","onboarding":"%s"}@.|}
+         (Ditz.Types.escape_json_string (Option.value dest ~default:path)) ob
+     | Quiet -> (match dest with Some d -> Fmt.pr "%s@." d | None -> ())
      | Human ->
        (match outcome with
-        | Wrote -> Fmt.pr "Wrote ditz onboarding block to %s@." path
-        | Skipped_present -> Fmt.pr "%s already has the ditz onboarding block.@." path
+        | Wrote d -> Fmt.pr "Wrote ditz onboarding block to %s@." d
+        | Skipped_present d -> Fmt.pr "%s already has the ditz onboarding block.@." d
         | Refused_symlink ->
           Fmt.epr "%s is a symlink; left it alone. Add the onboarding block to its target manually.@." path
         | Failed e -> Fmt.epr "Error: %s@." e));
@@ -223,14 +225,14 @@ let init_cmd =
          error is reported, not fatal. (To (re)write it later, `ditz onboard`.) *)
       let onboarding =
         if no_onboarding then None
-        else Some (Ditz.Onboarding.install ~path:(agents_md_path ()))
+        else Some (Ditz.Onboarding.install ~within:(Ditz.Git.find_git_root ()) ~path:(agents_md_path ()))
       in
       (match mode with
        | Json ->
          let ob = match onboarding with
            | None -> "skipped"
-           | Some Ditz.Onboarding.Wrote -> "wrote"
-           | Some Skipped_present -> "already-present"
+           | Some (Ditz.Onboarding.Wrote _) -> "wrote"
+           | Some (Skipped_present _) -> "already-present"
            | Some Refused_symlink -> "refused-symlink"
            | Some (Failed _) -> "failed"
          in
@@ -240,8 +242,8 @@ let init_cmd =
        | Human ->
          Fmt.pr "Initialized ditz project '%s'@." name;
          (match onboarding with
-          | None | Some Skipped_present -> ()
-          | Some Wrote -> Fmt.pr "Wrote ditz onboarding block to AGENTS.md@."
+          | None | Some (Skipped_present _) -> ()
+          | Some (Wrote d) -> Fmt.pr "Wrote ditz onboarding block to %s@." d
           | Some Refused_symlink ->
             Fmt.epr "Note: AGENTS.md is a symlink; left it alone. Add the ditz \
                      onboarding block to its target manually if you want it.@."

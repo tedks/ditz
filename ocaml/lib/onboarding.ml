@@ -37,9 +37,12 @@ Sync: `ditz sync` fetches/merges/pushes the metadata branch. See FORMAT.md for
 the file format and git model.
 |ditz}
 
+(* Wrote/Skipped carry the file actually touched — which may be a symlink's
+   resolved target (e.g. CLAUDE.md), not the path passed in (AGENTS.md) — so
+   callers report what really changed. *)
 type outcome =
-  | Wrote
-  | Skipped_present
+  | Wrote of string
+  | Skipped_present of string
   | Refused_symlink
   | Failed of string
 
@@ -50,32 +53,58 @@ let contains hay nee =
     let rec go i = i + nl <= hl && (String.sub hay i nl = nee || go (i + 1)) in
     go 0
 
+(* Is [target] (an absolute real path) inside directory [root]? *)
+let within_dir ~root target =
+  match (try Some (Unix.realpath root) with _ -> None) with
+  | None -> false
+  | Some rr ->
+    let rr = if rr <> "" && rr.[String.length rr - 1] = '/' then rr else rr ^ "/" in
+    String.starts_with ~prefix:rr target
+
 (** Install the snippet into [path] (e.g. "AGENTS.md"), appended between sentinel
     markers. Non-destructive: never overwrites existing content; a no-op if the
-    markers are already present; and REFUSES to write through a symlink — these
-    files are commonly symlinked to a shared canonical instruction file, and
-    even an atomic-rename replace would detach that link. *)
-let install ~path : outcome =
-  let write_block existing =
+    markers are already present.
+
+    Symlink handling: these files are commonly symlinked to a canonical
+    instruction file, and writing through one could corrupt it. So we follow a
+    symlink ONLY when it resolves to a real file inside [within] (the repo) —
+    e.g. AGENTS.md -> ./CLAUDE.md — and write to that target; a symlink that
+    resolves outside the repo (e.g. ~/.claude/CLAUDE.md), or a chain leaving it,
+    is refused. With [within] = None there's no repo context, so any symlink is
+    refused. *)
+let install ~within ~path : outcome =
+  let write_block dest existing =
     (* Skip on the start marker alone: never append a second block (no
        duplicates), and don't auto-"repair" a hand-mangled block. *)
-    if contains existing marker_start then Skipped_present
+    if contains existing marker_start then Skipped_present dest
     else
       let block = Printf.sprintf "%s\n%s\n%s\n" marker_start snippet marker_end in
       let content = if existing = "" then block else existing ^ "\n" ^ block in
-      (match Fs_util.write_file_atomic ~path ~content with
-       | Ok () -> Wrote
+      (match Fs_util.write_file_atomic ~path:dest ~content with
+       | Ok () -> Wrote dest
        | Error (`Msg e) -> Failed e)
   in
+  (* Append into a concrete (already de-symlinked) destination. *)
+  let install_concrete dest =
+    match (try Some (Unix.lstat dest) with Unix.Unix_error _ -> None) with
+    | None -> write_block dest ""   (* nothing there: create fresh *)
+    | Some st ->
+      (match st.Unix.st_kind with
+       | Unix.S_REG ->
+         (* CRITICAL: an existing-but-unreadable file must NOT be treated as
+            empty — that would atomically replace (destroy) it. Refuse instead. *)
+         (match (try Some (Fs_util.read_file dest) with _ -> None) with
+          | Some existing -> write_block dest existing
+          | None -> Failed (dest ^ " exists but could not be read; left unchanged"))
+       | Unix.S_LNK -> Refused_symlink   (* defensive; caller resolved already *)
+       | _ -> Failed (dest ^ " is not a regular file; left unchanged"))
+  in
   match (try Some (Unix.lstat path) with Unix.Unix_error _ -> None) with
-  | None -> write_block ""   (* nothing there: create fresh *)
-  | Some st ->
-    (match st.Unix.st_kind with
-     | Unix.S_LNK -> Refused_symlink   (* may point at a shared canonical file *)
-     | Unix.S_REG ->
-       (* CRITICAL: an existing-but-unreadable file must NOT be treated as
-          empty — that would atomically replace (destroy) it. Refuse instead. *)
-       (match (try Some (Fs_util.read_file path) with _ -> None) with
-        | Some existing -> write_block existing
-        | None -> Failed (path ^ " exists but could not be read; left unchanged"))
-     | _ -> Failed (path ^ " is not a regular file; left unchanged"))
+  | Some st when st.Unix.st_kind = Unix.S_LNK ->
+    (match within with
+     | Some root ->
+       (match (try Some (Unix.realpath path) with _ -> None) with
+        | Some real when within_dir ~root real -> install_concrete real
+        | _ -> Refused_symlink)
+     | None -> Refused_symlink)
+  | _ -> install_concrete path
