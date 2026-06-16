@@ -592,7 +592,7 @@ let test_sync_auto_resolves_divergence () =
        then diverges: status change with a NEWER event *)
     Sys.chdir c2;
     run_in ~cwd:c2 "git fetch origin";
-    run_in ~cwd:c2 "git branch ditz-metadata origin/ditz-metadata";
+    (* local branch auto-created by ensure_local_branch now; no workaround *)
     let () = assert_ok (Git.write_to_branch
       ~path:".ditz/issue-sync1.yaml"
       ~content:(sync_issue_yaml ~id:"sync1" ~title:"Shared" ~status:"In_progress"
@@ -641,7 +641,7 @@ let test_sync_conflict_escape_hatch () =
     let () = assert_ok (Git.sync ()) in
     Sys.chdir c2;
     run_in ~cwd:c2 "git fetch origin";
-    run_in ~cwd:c2 "git branch ditz-metadata origin/ditz-metadata";
+    (* local branch auto-created by ensure_local_branch now; no workaround *)
     let () = assert_ok (Git.write_to_branch
       ~path:".ditz/issue-sync2.yaml"
       ~content:(sync_issue_yaml ~id:"sync2" ~title:"Title from c2" ~status:"Unstarted" ~events:created)
@@ -678,6 +678,39 @@ let test_sync_conflict_escape_hatch () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_conflict_escape_hatch\n"
 
+let test_fresh_clone_can_join () =
+  let origin, c1, c2 = make_cloned_pair "ditz_onboard" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    (* c1 creates the tracker + an issue and pushes to origin. *)
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"Onboard") in
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-shared.yaml"
+      ~content:"id: shared\ntitle: Shared\n" ~commit_msg:"base") in
+    let () = assert_ok (Git.sync ()) in
+    (* c2 is a FRESH clone: after fetch it has origin/ditz-metadata but NO local
+       branch — and crucially we do NOT run the old `git branch` workaround. *)
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    assert (not (Git.branch_exists "ditz-metadata"));
+    assert (Git.branch_exists ~remote:true "ditz-metadata");
+    (* read: list finds the shared issue (would be [] without the fix) *)
+    let files = Git.list_ditz_files () in
+    assert (List.exists (fun f -> Filename.basename f = "issue-shared.yaml") files);
+    (* the local branch was auto-created by the read *)
+    assert (Git.branch_exists "ditz-metadata");
+    (* write also works from the fresh clone *)
+    let () = assert_ok (Git.write_to_branch
+      ~path:".ditz/issue-fromc2.yaml"
+      ~content:"id: fromc2\ntitle: From C2\n" ~commit_msg:"c2 add") in
+    let content = assert_ok (Git.read_file_from_branch ".ditz/issue-fromc2.yaml") in
+    assert (contains content "fromc2");
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: fresh_clone_can_join\n"
+
 let () =
   Printf.printf "Running git integration tests...\n\n";
   test_is_git_repo ();
@@ -705,5 +738,6 @@ let () =
   test_write_does_not_follow_symlink ();
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
+  test_fresh_clone_can_join ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

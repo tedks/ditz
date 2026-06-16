@@ -169,6 +169,15 @@ let branch_exists ?(remote = false) branch =
 let ditz_metadata_exists () =
   branch_exists ditz_branch || branch_exists ~remote:true ditz_branch
 
+(** A fresh clone has only origin/ditz-metadata and no local branch — but every
+    read/write resolves the LOCAL [ditz_branch] ref, so without this the tracker
+    looks empty and writes fail ("invalid reference"). Create the local branch
+    from origin the first time it's needed. Idempotent: no-op when the local
+    branch already exists or there is no remote branch to track. *)
+let ensure_local_branch () =
+  if (not (branch_exists ditz_branch)) && branch_exists ~remote:true ditz_branch then
+    ignore (git ["branch"; ditz_branch; "origin/" ^ ditz_branch])
+
 (** Get path to persistent worktree.
     First checks for an existing ditz-metadata worktree (via git worktree list),
     then falls back to <common-root>/.ditz-worktree. *)
@@ -237,6 +246,8 @@ let ensure_persistent_worktree () =
     or ephemeral worktree if DITZ_EPHEMERAL_WORKTREE=1 and no persistent worktree exists.
     Note: git only allows one worktree per branch, so if persistent exists we must use it. *)
 let with_worktree f =
+  (* A fresh clone needs its local branch before a worktree can be added. *)
+  ensure_local_branch ();
   (* If persistent worktree exists, always use it (git won't allow a second worktree) *)
   if persistent_worktree_valid () then
     match persistent_worktree_path () with
@@ -312,6 +323,7 @@ releases: []
 
 (** Read a file from the ditz-metadata branch without checkout *)
 let read_file_from_branch path =
+  ensure_local_branch ();
   let ref_path = ditz_branch ^ ":" ^ path in
   git ["show"; ref_path]
 
@@ -320,6 +332,7 @@ let read_file_from_branch path =
     cwd-derived prefix, so without it this silently returns [] (exit 0)
     when run from any subdirectory of a worktree. *)
 let list_ditz_files () =
+  ensure_local_branch ();
   match git ["ls-tree"; "--full-tree"; "--name-only"; ditz_branch ^ ":.ditz"] with
   | Ok output ->
     if output = "" then []
