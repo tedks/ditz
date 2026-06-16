@@ -30,6 +30,8 @@ for sub in list add init show close reopen start stop drop context ready \
 done
 
 "$BIN" init >/dev/null 2>&1
+# init writes the onboarding block into AGENTS.md (clobber-safe)
+contains "init writes AGENTS.md onboarding" "ditz ready" "$(cat AGENTS.md 2>/dev/null)"
 
 # 7.3 one-shot creation
 id="$("$BIN" add "Login fails" -t bugfix -c auth --desc "repro steps" --ids-only)"; rc=$?

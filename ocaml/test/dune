@@ -60,3 +60,7 @@
 (test
  (name import_beads_test)
  (libraries ditz yaml))
+
+(test
+ (name onboarding_test)
+ (libraries ditz unix))
