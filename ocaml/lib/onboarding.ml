@@ -37,9 +37,12 @@ Sync: `ditz sync` fetches/merges/pushes the metadata branch. See FORMAT.md for
 the file format and git model.
 |ditz}
 
+(* Wrote/Skipped carry the file actually touched — which may be a symlink's
+   resolved target (e.g. CLAUDE.md), not the path passed in (AGENTS.md) — so
+   callers report what really changed. *)
 type outcome =
-  | Wrote
-  | Skipped_present
+  | Wrote of string
+  | Skipped_present of string
   | Refused_symlink
   | Failed of string
 
@@ -73,12 +76,12 @@ let install ~within ~path : outcome =
   let write_block dest existing =
     (* Skip on the start marker alone: never append a second block (no
        duplicates), and don't auto-"repair" a hand-mangled block. *)
-    if contains existing marker_start then Skipped_present
+    if contains existing marker_start then Skipped_present dest
     else
       let block = Printf.sprintf "%s\n%s\n%s\n" marker_start snippet marker_end in
       let content = if existing = "" then block else existing ^ "\n" ^ block in
       (match Fs_util.write_file_atomic ~path:dest ~content with
-       | Ok () -> Wrote
+       | Ok () -> Wrote dest
        | Error (`Msg e) -> Failed e)
   in
   (* Append into a concrete (already de-symlinked) destination. *)
