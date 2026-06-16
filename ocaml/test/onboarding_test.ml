@@ -54,15 +54,22 @@ let () =
   print_endline "PASS: refuses symlink with no repo context";
 
   (* in-repo symlink target (AGENTS.md -> ./canonical.md): follow it and write
-     into the target, since it's inside [within]. *)
-  assert (is_wrote (Onboarding.install ~within:(Some dir) ~path:link));
+     into the target, since it's inside [within]. The reported destination must
+     be the RESOLVED target, not the link path (that's the whole fix). *)
+  let real_target = Unix.realpath target in
+  (match Onboarding.install ~within:(Some dir) ~path:link with
+   | Onboarding.Wrote d -> assert (d = real_target)
+   | o -> failwith ("expected Wrote target, got " ^ outcome_name o));
+  ignore is_wrote;
   let tc = read target in
   assert (Onboarding.contains tc "CANONICAL");            (* original preserved *)
   assert (Onboarding.contains tc Onboarding.marker_start);(* block written into target *)
   assert ((Unix.lstat link).Unix.st_kind = Unix.S_LNK);  (* link still a link *)
-  (* and it's idempotent through the link now *)
-  assert (is_skipped (Onboarding.install ~within:(Some dir) ~path:link));
-  print_endline "PASS: follows in-repo symlink, writes target";
+  (* and it's idempotent through the link now, still reporting the target *)
+  (match Onboarding.install ~within:(Some dir) ~path:link with
+   | Onboarding.Skipped_present d -> assert (d = real_target)
+   | o -> failwith ("expected Skipped_present target, got " ^ outcome_name o));
+  print_endline "PASS: follows in-repo symlink, writes+reports target";
 
   (* out-of-repo symlink target (e.g. ~/.claude/CLAUDE.md): refused even with a
      repo context — never write through to a shared global file. *)
