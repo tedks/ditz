@@ -174,23 +174,83 @@ let add_cmd =
   in
   Cmd.v info Term.(const run $ title_arg $ id_opt $ type_opt $ component_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 
+(* AGENTS.md lands at the working-tree root (where agents read it on arrival),
+   not the cwd init happened to run from; falls back to cwd outside a repo. *)
+let agents_md_path () =
+  match Ditz.Git.find_git_root () with
+  | Some root -> Filename.concat root "AGENTS.md"
+  | None -> "AGENTS.md"
+
+let onboard_cmd =
+  let doc = "Write the ditz agent-onboarding block into AGENTS.md (re-runnable)" in
+  let info = Cmd.info "onboard" ~doc in
+  let run json quiet () =
+    let mode = output_mode json quiet in
+    let path = agents_md_path () in
+    let outcome = Ditz.Onboarding.install ~path in
+    (match mode with
+     | Json ->
+       let ob = match outcome with
+         | Ditz.Onboarding.Wrote -> "wrote"
+         | Skipped_present -> "already-present"
+         | Refused_symlink -> "refused-symlink"
+         | Failed _ -> "failed"
+       in
+       Fmt.pr {|{"path":"%s","onboarding":"%s"}@.|} (Ditz.Types.escape_json_string path) ob
+     | Quiet -> (match outcome with Wrote | Skipped_present -> Fmt.pr "%s@." path | _ -> ())
+     | Human ->
+       (match outcome with
+        | Wrote -> Fmt.pr "Wrote ditz onboarding block to %s@." path
+        | Skipped_present -> Fmt.pr "%s already has the ditz onboarding block.@." path
+        | Refused_symlink ->
+          Fmt.epr "%s is a symlink; left it alone. Add the onboarding block to its target manually.@." path
+        | Failed e -> Fmt.epr "Error: %s@." e));
+    (match outcome with Failed _ -> 1 | _ -> 0)
+  in
+  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+
 let init_cmd =
   let doc = "Initialize a new ditz project" in
   let info = Cmd.info "init" ~doc in
-  let run json quiet () =
+  let no_onboarding = Arg.(value & flag & info ["no-onboarding"] ~doc:"Don't write the ditz onboarding block into AGENTS.md") in
+  let run no_onboarding json quiet () =
     let mode = output_mode json quiet in
     let name = Filename.basename (Sys.getcwd ()) in
     match Ditz.Storage.init_project ~name ~issue_dir:".ditz" with
     | Ok () ->
+      (* Drop the agent-onboarding block into the repo-root AGENTS.md. Never
+         fails init: a symlink (commonly -> a shared canonical file) or write
+         error is reported, not fatal. (To (re)write it later, `ditz onboard`.) *)
+      let onboarding =
+        if no_onboarding then None
+        else Some (Ditz.Onboarding.install ~path:(agents_md_path ()))
+      in
       (match mode with
-       | Json -> Fmt.pr {|{"project":"%s","status":"initialized"}@.|} (Ditz.Types.escape_json_string name)
+       | Json ->
+         let ob = match onboarding with
+           | None -> "skipped"
+           | Some Ditz.Onboarding.Wrote -> "wrote"
+           | Some Skipped_present -> "already-present"
+           | Some Refused_symlink -> "refused-symlink"
+           | Some (Failed _) -> "failed"
+         in
+         Fmt.pr {|{"project":"%s","status":"initialized","onboarding":"%s"}@.|}
+           (Ditz.Types.escape_json_string name) ob
        | Quiet -> Fmt.pr "%s@." name
-       | Human -> Fmt.pr "Initialized ditz project '%s'@." name);
+       | Human ->
+         Fmt.pr "Initialized ditz project '%s'@." name;
+         (match onboarding with
+          | None | Some Skipped_present -> ()
+          | Some Wrote -> Fmt.pr "Wrote ditz onboarding block to AGENTS.md@."
+          | Some Refused_symlink ->
+            Fmt.epr "Note: AGENTS.md is a symlink; left it alone. Add the ditz \
+                     onboarding block to its target manually if you want it.@."
+          | Some (Failed e) -> Fmt.epr "Note: could not write AGENTS.md: %s@." e));
       0
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
   in
-  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ no_onboarding $ json_flag $ quiet_flag $ setup_log_term)
 
 let show_cmd =
   let doc = "Show issue details" in
@@ -1192,6 +1252,7 @@ let main_cmd =
     list_cmd;
     add_cmd;
     init_cmd;
+    onboard_cmd;
     show_cmd;
     close_cmd;
     reopen_cmd;
