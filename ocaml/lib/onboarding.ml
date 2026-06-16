@@ -20,8 +20,8 @@ The loop:
 - `ditz reopen <id>` — revive a closed issue
 
 Create / inspect:
-- `ditz add "title" -t bug|feature|task -c <component> --desc "..."`
-- `ditz show <id>` · `ditz list --status open` · `ditz search <q>`
+- `ditz add "title" -t bugfix|feature|task -c <component> --desc "..."`
+- `ditz show <id>` · `ditz list --status unstarted|in_progress|paused|closed` · `ditz search <q>`
 - `--json` on any command for machine output; `--ids-only` for just ids
 - ids: copy them from output; a unique prefix works (like git hashes);
   `--id <name>` sets a deterministic id (re-creating with it is idempotent)
@@ -56,14 +56,9 @@ let contains hay nee =
     files are commonly symlinked to a shared canonical instruction file, and
     even an atomic-rename replace would detach that link. *)
 let install ~path : outcome =
-  match (try Some (Unix.lstat path) with _ -> None) with
-  | Some st when st.Unix.st_kind = Unix.S_LNK -> Refused_symlink
-  | maybe_st ->
-    let existing =
-      match maybe_st with
-      | Some _ -> (try Fs_util.read_file path with _ -> "")
-      | None -> ""
-    in
+  let write_block existing =
+    (* Skip on the start marker alone: never append a second block (no
+       duplicates), and don't auto-"repair" a hand-mangled block. *)
     if contains existing marker_start then Skipped_present
     else
       let block = Printf.sprintf "%s\n%s\n%s\n" marker_start snippet marker_end in
@@ -71,3 +66,16 @@ let install ~path : outcome =
       (match Fs_util.write_file_atomic ~path ~content with
        | Ok () -> Wrote
        | Error (`Msg e) -> Failed e)
+  in
+  match (try Some (Unix.lstat path) with Unix.Unix_error _ -> None) with
+  | None -> write_block ""   (* nothing there: create fresh *)
+  | Some st ->
+    (match st.Unix.st_kind with
+     | Unix.S_LNK -> Refused_symlink   (* may point at a shared canonical file *)
+     | Unix.S_REG ->
+       (* CRITICAL: an existing-but-unreadable file must NOT be treated as
+          empty — that would atomically replace (destroy) it. Refuse instead. *)
+       (match (try Some (Fs_util.read_file path) with _ -> None) with
+        | Some existing -> write_block existing
+        | None -> Failed (path ^ " exists but could not be read; left unchanged"))
+     | _ -> Failed (path ^ " is not a regular file; left unchanged"))

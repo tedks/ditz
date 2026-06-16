@@ -19,10 +19,11 @@ worktree at `<repo>/.ditz-worktree` (reused across commands; set
 `DITZ_EPHEMERAL_WORKTREE=1` for a throwaway worktree per command instead).
 
 - Every write commits to `ditz-metadata` automatically.
-- `ditz sync` fetches, merges, and pushes that branch. Merges auto-resolve
-  (log events union, last-write-wins status, no-resurrection of deleted edges);
-  a genuine conflict (both sides changed the same scalar) aborts and leaves
-  `.ditz-conflict/<file>.{LOCAL,REMOTE}`.
+- `ditz sync` fetches, merges, and pushes that branch. Merges auto-resolve:
+  log_events union, status+disposition by last-write-wins, reference lists by
+  three-way merge (no resurrection of deleted edges). Only when both sides
+  change the same *identity* scalar (title, desc, type, component) does it
+  abort and leave `.ditz-conflict/<file>.{LOCAL,REMOTE}`.
 - A fresh clone joins automatically: the local `ditz-metadata` branch is
   created from `origin/ditz-metadata` on first read/write.
 

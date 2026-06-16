@@ -174,6 +174,41 @@ let add_cmd =
   in
   Cmd.v info Term.(const run $ title_arg $ id_opt $ type_opt $ component_opt $ desc_opt $ desc_stdin_flag $ json_flag $ quiet_flag $ setup_log_term)
 
+(* AGENTS.md lands at the working-tree root (where agents read it on arrival),
+   not the cwd init happened to run from; falls back to cwd outside a repo. *)
+let agents_md_path () =
+  match Ditz.Git.find_git_root () with
+  | Some root -> Filename.concat root "AGENTS.md"
+  | None -> "AGENTS.md"
+
+let onboard_cmd =
+  let doc = "Write the ditz agent-onboarding block into AGENTS.md (re-runnable)" in
+  let info = Cmd.info "onboard" ~doc in
+  let run json quiet () =
+    let mode = output_mode json quiet in
+    let path = agents_md_path () in
+    let outcome = Ditz.Onboarding.install ~path in
+    (match mode with
+     | Json ->
+       let ob = match outcome with
+         | Ditz.Onboarding.Wrote -> "wrote"
+         | Skipped_present -> "already-present"
+         | Refused_symlink -> "refused-symlink"
+         | Failed _ -> "failed"
+       in
+       Fmt.pr {|{"path":"%s","onboarding":"%s"}@.|} (Ditz.Types.escape_json_string path) ob
+     | Quiet -> (match outcome with Wrote | Skipped_present -> Fmt.pr "%s@." path | _ -> ())
+     | Human ->
+       (match outcome with
+        | Wrote -> Fmt.pr "Wrote ditz onboarding block to %s@." path
+        | Skipped_present -> Fmt.pr "%s already has the ditz onboarding block.@." path
+        | Refused_symlink ->
+          Fmt.epr "%s is a symlink; left it alone. Add the onboarding block to its target manually.@." path
+        | Failed e -> Fmt.epr "Error: %s@." e));
+    (match outcome with Failed _ -> 1 | _ -> 0)
+  in
+  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+
 let init_cmd =
   let doc = "Initialize a new ditz project" in
   let info = Cmd.info "init" ~doc in
@@ -183,12 +218,12 @@ let init_cmd =
     let name = Filename.basename (Sys.getcwd ()) in
     match Ditz.Storage.init_project ~name ~issue_dir:".ditz" with
     | Ok () ->
-      (* Drop the agent-onboarding block into AGENTS.md in cwd. Never fails init:
-         a symlink (commonly -> a shared canonical file) or write error is
-         reported, not fatal. *)
+      (* Drop the agent-onboarding block into the repo-root AGENTS.md. Never
+         fails init: a symlink (commonly -> a shared canonical file) or write
+         error is reported, not fatal. (To (re)write it later, `ditz onboard`.) *)
       let onboarding =
         if no_onboarding then None
-        else Some (Ditz.Onboarding.install ~path:"AGENTS.md")
+        else Some (Ditz.Onboarding.install ~path:(agents_md_path ()))
       in
       (match mode with
        | Json ->
@@ -1217,6 +1252,7 @@ let main_cmd =
     list_cmd;
     add_cmd;
     init_cmd;
+    onboard_cmd;
     show_cmd;
     close_cmd;
     reopen_cmd;

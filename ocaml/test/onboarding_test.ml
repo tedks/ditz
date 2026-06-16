@@ -47,4 +47,31 @@ let () =
   assert ((Unix.lstat link).Unix.st_kind = Unix.S_LNK); (* link still a link *)
   print_endline "PASS: refuses symlink, leaves target intact";
 
+  (* CRITICAL regression: an existing-but-unreadable file must NOT be clobbered
+     (treated as empty and replaced). Refuse, leave it byte-for-byte intact. *)
+  let unreadable = Filename.concat dir "UNREADABLE.md" in
+  let oc = open_out unreadable in output_string oc "PRECIOUS USER CONTENT\n"; close_out oc;
+  Unix.chmod unreadable 0o000;
+  (* (root can read 000 files; skip the destructive assertion if so) *)
+  let readable_as_empty = (try ignore (read unreadable); true with _ -> false) in
+  if not readable_as_empty then begin
+    (match Onboarding.install ~path:unreadable with
+     | Onboarding.Failed _ -> () | o -> failwith (Printf.sprintf "expected Failed on unreadable, got %s"
+       (match o with Wrote -> "Wrote" | Skipped_present -> "Skipped" | Refused_symlink -> "Refused" | Failed _ -> "Failed")));
+    Unix.chmod unreadable 0o600;
+    assert (read unreadable = "PRECIOUS USER CONTENT\n");   (* untouched *)
+    print_endline "PASS: refuses unreadable file, content intact"
+  end else begin
+    Unix.chmod unreadable 0o600;
+    print_endline "SKIP: unreadable-file test (running as root, 000 still readable)"
+  end;
+
+  (* a directory at the path is refused, not crashed *)
+  let asdir = Filename.concat dir "ASDIR.md" in
+  Unix.mkdir asdir 0o755;
+  (match Onboarding.install ~path:asdir with
+   | Onboarding.Failed _ -> () | _ -> failwith "expected Failed when path is a directory");
+  assert (Sys.is_directory asdir);
+  print_endline "PASS: refuses directory path";
+
   print_endline "\nAll onboarding tests passed!"

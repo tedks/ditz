@@ -32,6 +32,8 @@ done
 "$BIN" init >/dev/null 2>&1
 # init writes the onboarding block into AGENTS.md (clobber-safe)
 contains "init writes AGENTS.md onboarding" "ditz ready" "$(cat AGENTS.md 2>/dev/null)"
+# `ditz onboard` is re-runnable and idempotent (AGENTS.md already has the block)
+contains "onboard idempotent" "already-present" "$("$BIN" onboard --json 2>&1)"
 
 # 7.3 one-shot creation
 id="$("$BIN" add "Login fails" -t bugfix -c auth --desc "repro steps" --ids-only)"; rc=$?
