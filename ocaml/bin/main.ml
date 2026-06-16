@@ -187,7 +187,7 @@ let onboard_cmd =
   let run json quiet () =
     let mode = output_mode json quiet in
     let path = agents_md_path () in
-    let outcome = Ditz.Onboarding.install ~path in
+    let outcome = Ditz.Onboarding.install ~within:(Ditz.Git.find_git_root ()) ~path in
     (match mode with
      | Json ->
        let ob = match outcome with
@@ -223,7 +223,7 @@ let init_cmd =
          error is reported, not fatal. (To (re)write it later, `ditz onboard`.) *)
       let onboarding =
         if no_onboarding then None
-        else Some (Ditz.Onboarding.install ~path:(agents_md_path ()))
+        else Some (Ditz.Onboarding.install ~within:(Ditz.Git.find_git_root ()) ~path:(agents_md_path ()))
       in
       (match mode with
        | Json ->
