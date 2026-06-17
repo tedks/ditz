@@ -711,6 +711,47 @@ let test_fresh_clone_can_join () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: fresh_clone_can_join\n"
 
+let test_push_only_fresh_clone () =
+  let origin, c1, c2 = make_cloned_pair "ditz_pushonly" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"P") in
+    let () = assert_ok (Git.sync ()) in
+    (* c2: fresh clone, fetched, NO local branch — `push` (sync --push-only)
+       must materialize the local branch from origin and not fail. *)
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    assert (not (Git.branch_exists "ditz-metadata"));
+    let () = assert_ok (Git.push ()) in
+    assert (Git.branch_exists "ditz-metadata");
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: push_only_fresh_clone\n"
+
+let test_submodule_refused () =
+  let super = make_temp_dir "ditz_super" in
+  let sub = make_temp_dir "ditz_sub" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf super; rm_rf sub in
+  (try
+    init_git_repo sub;
+    init_git_repo super;
+    run_in ~cwd:super
+      (Printf.sprintf "git -c protocol.file.allow=always submodule add %s subm"
+        (Filename.quote sub));
+    run_in ~cwd:super "git commit -m 'add submodule'";
+    Sys.chdir (Filename.concat super "subm");
+    assert (Git.in_submodule ());
+    (* both create paths refuse cleanly rather than landing state in
+       <super>/.git/modules/subm *)
+    assert_error (Git.create_ditz_metadata_branch ~project_name:"X");
+    assert_error (Git.create_persistent_worktree ());
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: submodule_refused\n"
+
 let () =
   Printf.printf "Running git integration tests...\n\n";
   test_is_git_repo ();
@@ -739,5 +780,7 @@ let () =
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
   test_fresh_clone_can_join ();
+  test_push_only_fresh_clone ();
+  test_submodule_refused ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"
