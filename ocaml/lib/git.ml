@@ -82,18 +82,18 @@ let find_common_root () =
     else Some dir
   | None -> None
 
-(* A submodule's git dir is <super>/.git/modules/<name>. ditz state there is
-   fragile (git submodule deinit / absorbgitdirs would take it), so we refuse
-   rather than create it. tedks has no submodules; this is a clean failure for
-   an unsupported edge, not a feature. *)
+(* Inside a git submodule? A submodule's state lives in <super>/.git/modules/...
+   which is fragile (git submodule deinit / absorbgitdirs would take it), so we
+   refuse rather than create ditz state there. tedks has no submodules; this is
+   a clean failure for an unsupported edge, not a feature.
+   `--show-superproject-working-tree` prints the superproject's worktree iff
+   this repo is a submodule, and nothing otherwise — exact, unlike a path
+   substring that would false-positive on a repo merely rooted under some
+   ".git/modules/" path. *)
 let in_submodule () =
-  match find_common_git_dir () with
-  | None -> false
-  | Some dir ->
-    let needle = "/.git/modules/" in
-    let hl = String.length dir and nl = String.length needle in
-    let rec scan i = i + nl <= hl && (String.sub dir i nl = needle || scan (i + 1)) in
-    scan 0
+  match git ["rev-parse"; "--show-superproject-working-tree"] with
+  | Ok out -> String.trim out <> ""
+  | Error _ -> false
 
 let submodule_error =
   Error (`Msg "ditz inside a git submodule is not supported (its .git/modules \

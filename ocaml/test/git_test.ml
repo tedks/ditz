@@ -744,13 +744,35 @@ let test_submodule_refused () =
     run_in ~cwd:super "git commit -m 'add submodule'";
     Sys.chdir (Filename.concat super "subm");
     assert (Git.in_submodule ());
-    (* both create paths refuse cleanly rather than landing state in
-       <super>/.git/modules/subm *)
-    assert_error (Git.create_ditz_metadata_branch ~project_name:"X");
-    assert_error (Git.create_persistent_worktree ());
+    (* both create paths refuse cleanly (for the submodule reason, not some
+       other failure) rather than landing state in <super>/.git/modules/subm *)
+    let mentions_submodule = function
+      | Error (`Msg m) -> contains m "submodule"
+      | Ok _ -> false
+    in
+    assert (mentions_submodule (Git.create_ditz_metadata_branch ~project_name:"X"));
+    assert (mentions_submodule (Git.create_persistent_worktree ()));
     cleanup ()
   with e -> cleanup (); raise e);
   Printf.printf "PASS: submodule_refused\n"
+
+let test_submodule_no_false_positive () =
+  (* A normal repo whose PATH merely contains ".git/modules" must NOT be taken
+     for a submodule (the old substring check got this wrong). *)
+  let base = make_temp_dir "ditz_fp" in
+  let nested = Filename.concat base ".git/modules/foo" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf base in
+  (try
+    let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote nested)) in
+    init_git_repo nested;
+    Sys.chdir nested;
+    assert (not (Git.in_submodule ()));
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"FP") in
+    assert (Git.ditz_metadata_exists ());
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: submodule_no_false_positive\n"
 
 let () =
   Printf.printf "Running git integration tests...\n\n";
@@ -782,5 +804,6 @@ let () =
   test_fresh_clone_can_join ();
   test_push_only_fresh_clone ();
   test_submodule_refused ();
+  test_submodule_no_false_positive ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"
