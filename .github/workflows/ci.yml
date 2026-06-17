@@ -5,9 +5,18 @@ on:
   push:
     branches: [master]
 
+# Supersede in-flight runs for the same ref (a new push cancels the old run);
+# never cancel master pushes (each populates the shared nix cache).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    # Cold toolchain build is ~15 min; headroom over a warm-cache ~5 min run and
+    # a backstop against a hung step.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

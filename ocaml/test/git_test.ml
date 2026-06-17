@@ -711,6 +711,69 @@ let test_fresh_clone_can_join () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: fresh_clone_can_join\n"
 
+let test_push_only_fresh_clone () =
+  let origin, c1, c2 = make_cloned_pair "ditz_pushonly" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"P") in
+    let () = assert_ok (Git.sync ()) in
+    (* c2: fresh clone, fetched, NO local branch — `push` (sync --push-only)
+       must materialize the local branch from origin and not fail. *)
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    assert (not (Git.branch_exists "ditz-metadata"));
+    let () = assert_ok (Git.push ()) in
+    assert (Git.branch_exists "ditz-metadata");
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: push_only_fresh_clone\n"
+
+let test_submodule_refused () =
+  let super = make_temp_dir "ditz_super" in
+  let sub = make_temp_dir "ditz_sub" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf super; rm_rf sub in
+  (try
+    init_git_repo sub;
+    init_git_repo super;
+    run_in ~cwd:super
+      (Printf.sprintf "git -c protocol.file.allow=always submodule add %s subm"
+        (Filename.quote sub));
+    run_in ~cwd:super "git commit -m 'add submodule'";
+    Sys.chdir (Filename.concat super "subm");
+    assert (Git.in_submodule ());
+    (* both create paths refuse cleanly (for the submodule reason, not some
+       other failure) rather than landing state in <super>/.git/modules/subm *)
+    let mentions_submodule = function
+      | Error (`Msg m) -> contains m "submodule"
+      | Ok _ -> false
+    in
+    assert (mentions_submodule (Git.create_ditz_metadata_branch ~project_name:"X"));
+    assert (mentions_submodule (Git.create_persistent_worktree ()));
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: submodule_refused\n"
+
+let test_submodule_no_false_positive () =
+  (* A normal repo whose PATH merely contains ".git/modules" must NOT be taken
+     for a submodule (the old substring check got this wrong). *)
+  let base = make_temp_dir "ditz_fp" in
+  let nested = Filename.concat base ".git/modules/foo" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf base in
+  (try
+    let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote nested)) in
+    init_git_repo nested;
+    Sys.chdir nested;
+    assert (not (Git.in_submodule ()));
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"FP") in
+    assert (Git.ditz_metadata_exists ());
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: submodule_no_false_positive\n"
+
 let () =
   Printf.printf "Running git integration tests...\n\n";
   test_is_git_repo ();
@@ -739,5 +802,8 @@ let () =
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
   test_fresh_clone_can_join ();
+  test_push_only_fresh_clone ();
+  test_submodule_refused ();
+  test_submodule_no_false_positive ();
   test_storage_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

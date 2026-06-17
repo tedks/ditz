@@ -70,16 +70,34 @@ let find_common_git_dir () =
     its parent. For a bare repo the common git dir IS the repo — using its
     parent would place .ditz-worktree outside the repository, shared with (and
     corrupted by) any sibling bare repo under the same parent directory.
-    Known blind spot: inside a submodule the common dir is
-    <super>/.git/modules/<name>, so the container lands inside the
-    superproject's git dir — repo-unique (safe from cross-talk) but removed
-    wholesale by `git submodule deinit`. Tracked as a follow-up issue. *)
+    Submodules are refused (see [in_submodule]): inside one the common dir is
+    <super>/.git/modules/<name>, so the container would land inside the
+    superproject's git dir — repo-unique but removed wholesale by
+    `git submodule deinit`. Rather than silently create fragile state there,
+    the worktree-creation paths refuse with a clear message. *)
 let find_common_root () =
   match find_common_git_dir () with
   | Some dir ->
     if Filename.basename dir = ".git" then Some (Filename.dirname dir)
     else Some dir
   | None -> None
+
+(* Inside a git submodule? A submodule's state lives in <super>/.git/modules/...
+   which is fragile (git submodule deinit / absorbgitdirs would take it), so we
+   refuse rather than create ditz state there. tedks has no submodules; this is
+   a clean failure for an unsupported edge, not a feature.
+   `--show-superproject-working-tree` prints the superproject's worktree iff
+   this repo is a submodule, and nothing otherwise — exact, unlike a path
+   substring that would false-positive on a repo merely rooted under some
+   ".git/modules/" path. *)
+let in_submodule () =
+  match git ["rev-parse"; "--show-superproject-working-tree"] with
+  | Ok out -> String.trim out <> ""
+  | Error _ -> false
+
+let submodule_error =
+  Error (`Msg "ditz inside a git submodule is not supported (its .git/modules \
+               dir is unstable); run ditz in the superproject instead")
 
 (** Parse `git worktree list --porcelain` to find an existing worktree
     checked out on the ditz-metadata branch. Returns Some path or None.
@@ -213,13 +231,18 @@ let persistent_worktree_valid () =
 
 (** Create persistent worktree with sparse checkout *)
 let create_persistent_worktree () =
+  if in_submodule () then submodule_error
+  else
   match persistent_worktree_path () with
   | None -> Error (`Msg "Not in a git repository")
   | Some path ->
     if Sys.file_exists path then
       (* Already exists, verify it's correct *)
       if persistent_worktree_valid () then Ok path
-      else Error (`Msg (Printf.sprintf "%s exists but is not a valid ditz worktree" path))
+      else Error (`Msg (Printf.sprintf
+        "%s exists but is not a checkout of %s (wrong branch, detached HEAD, or \
+         another repo's worktree). Remove it (git worktree remove --force) and retry."
+        path ditz_branch))
     else
       (* Create the worktree *)
       match git ["worktree"; "add"; path; ditz_branch] with
@@ -274,7 +297,8 @@ let with_worktree f =
 let create_ditz_metadata_branch ~project_name =
   (* find_git_root requires a work tree and so is false at a bare repo root;
      is_git_repo holds anywhere inside the repository. Error, never failwith. *)
-  if not (is_git_repo ()) then Error (`Msg "Not in a git repository")
+  if in_submodule () then submodule_error
+  else if not (is_git_repo ()) then Error (`Msg "Not in a git repository")
   else
   let temp_dir = Filename.temp_file "ditz_init" "" in
   Sys.remove temp_dir;
@@ -283,8 +307,14 @@ let create_ditz_metadata_branch ~project_name =
   match git ["worktree"; "add"; "--detach"; temp_dir; "HEAD"] with
   | Error e -> Error e
   | Ok _ ->
-    (* Now in the worktree, create orphan branch *)
-    let result =
+    (* Fun.protect: an exception while populating the worktree (Unix.mkdir,
+       a write, ...) must still remove the temp worktree, not leak it. *)
+    Fun.protect
+      ~finally:(fun () ->
+        let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
+        let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
+        ())
+    @@ fun () ->
       match git ~cwd:temp_dir ["checkout"; "--orphan"; ditz_branch] with
       | Error e -> Error e
       | Ok _ ->
@@ -314,12 +344,6 @@ releases: []
             match git ~cwd:temp_dir ["commit"; "-m"; "ditz: initialize issue tracker"] with
             | Error e -> Error e
             | Ok _ -> Ok ()
-    in
-    (* Clean up worktree *)
-    let _ = git ["worktree"; "remove"; "--force"; temp_dir] in
-    (* Ensure the temp directory is cleaned up *)
-    let _ = Sys.command (Printf.sprintf "rm -rf %s" (Filename.quote temp_dir)) in
-    result
 
 (** Read a file from the ditz-metadata branch without checkout *)
 let read_file_from_branch path =
@@ -621,6 +645,9 @@ let merge () =
 
 (** Push ditz-metadata to origin *)
 let push () =
+  (* On a fresh clone `sync --push-only` would have no local branch to push;
+     materialize it from origin first (no-op if it already exists). *)
+  ensure_local_branch ();
   match git ["push"; "-u"; "origin"; ditz_branch] with
   | Ok _ -> Ok ()
   | Error e -> Error e
