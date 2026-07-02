@@ -75,16 +75,23 @@ master happens to be.
   install works as-is. Because each host builds for its own system, the
   Xeon/`target-cpu=native` portability issues that bite prebuilt binaries do not
   apply here — there is no prebuilt binary being copied between hosts.
-- **homes-imac** (macOS): the flake targets darwin (`x86_64-darwin` /
-  `aarch64-darwin`) via `flake-utils.eachDefaultSystem`, so the same
-  `nix profile install` command *should* work. This has NOT been verified from
-  the Linux build host. Before relying on it, confirm the build resolves on the
-  iMac:
-  ```
-  nix build github:tedks/ditz#ditz && ./result/bin/ditz --version
-  ```
-  If opam-nix fails to resolve a dependency on darwin, file an issue — that is a
-  flake fix, not an install-procedure problem.
+- **macOS: requires macOS 14 (Sonoma) or newer.** The flake targets darwin
+  (`x86_64-darwin` / `aarch64-darwin`), so `nix profile install
+  github:tedks/ditz#ditz` works on a current macOS. On older macOS it does not,
+  for two independent reasons found by testing on homes-imac (macOS 12.7.2,
+  2026-06):
+  - Current **Nix** (2.34.x) won't run on macOS < 14 — `libnixexpr` imports a
+    `std::pmr` symbol Apple's libc++ only exports on macOS 14+ (`dyld: Symbol
+    not found` → abort). (Pinning an older Nix, ≤ 2.29.x, gets Nix running on
+    macOS 12, but see the next point.)
+  - Current **nixpkgs** darwin packages won't run on macOS < 13 — e.g.
+    `coreutils` (in every build sandbox) needs `mkfifoat`, a libSystem symbol
+    added in macOS 13. So even with an older Nix, the ditz build fails at
+    `unpackPhase`.
+
+  Net: macOS 12 (Monterey) is unsupported; upgrade to macOS 14+ and the
+  canonical install works. This is an OS-age/nixpkgs limitation, not a ditz or
+  flake bug — there is no ditz-side fix.
 
 ## Fallback: build from a dev shell (no profile install)
 
