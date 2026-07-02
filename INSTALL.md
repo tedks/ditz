@@ -93,6 +93,11 @@ master happens to be.
   canonical install works. This is an OS-age/nixpkgs limitation, not a ditz or
   flake bug — there is no ditz-side fix.
 
+  (Verified on Intel `x86_64-darwin`. Both walls are OS-version symbol gates in
+  Apple's libc++/libSystem, which are per-release and not arch-specific, so the
+  macOS-14 floor is expected to hold on Apple Silicon `aarch64-darwin` too —
+  though that wasn't separately tested.)
+
 ## Fallback: build from a dev shell (no profile install)
 
 On a machine where you already use the dev shell, you can build and copy the
