@@ -15,3 +15,12 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-08-19T01:30:32-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Found 2026-08-19 during fleet recon in ~/Projects/dotfiles: text output
+    claimed Open 46 / in-progress 3 / Closed 19 / Bugs 2, while ditz status --json
+    and an independent tally of .ditz/*.yaml on ditz-metadata both said open 45 /
+    in_progress 2 / closed 20 / bugs 1. The text renderer miscounts one closed issue
+    as in-progress. Machine consumers should use --json only (already true of the
+    vault''s sync-trackers.py).'
