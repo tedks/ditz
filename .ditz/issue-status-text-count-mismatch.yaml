@@ -1,0 +1,17 @@
+id: status-text-count-mismatch
+title: 'ditz status text output miscounts: disagrees with --json and raw YAML (claims
+  one closed issue as in_progress)'
+desc: ""
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-19T01:30:32-00:00
+references: []
+log_events:
+- time: 2026-08-19T01:30:32-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
