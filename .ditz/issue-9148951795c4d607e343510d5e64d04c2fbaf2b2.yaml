@@ -1,0 +1,26 @@
+id: 9148951795c4d607e343510d5e64d04c2fbaf2b2
+title: init names the project after $PWD, wrong in a worktree layout
+desc: '`ditz init` takes the project name from `Filename.basename (Sys.getcwd ())`.
+  In the bare-repo-plus-worktrees layout used across ~/Projects, every feature worktree
+  is named <project>-<branch>, so initializing from one produces a project (and component)
+  named e.g. ''goals-migrate-beads-to-ditz'' instead of ''goals''.
+
+
+  Hit during the goals migration; corrected by hand on the ditz-metadata branch afterwards.
+
+
+  find_common_root already exists for exactly this cross-worktree problem, so the
+  name should come from the common root''s basename rather than the cwd.'
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-20T23:34:59-00:00
+references: []
+log_events:
+- time: 2026-08-20T23:34:59-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
