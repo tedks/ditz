@@ -290,8 +290,15 @@ let find_issue_by_id_in issues id_prefix =
   | [] -> Error (`Msg (Printf.sprintf "No issue found matching '%s'" id_prefix))
   | [issue] -> Ok issue
   | _ ->
-    let ids = List.map (fun (i : issue) -> i.id) matches in
-    Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids)))
+    (* An exact id names exactly one issue and is never ambiguous, even when it
+       is also a prefix of others: "goals-53u" must resolve to the epic itself
+       and not complain about "goals-53u-1". Without this, an issue whose id
+       prefixes a sibling's is unaddressable by any command. *)
+    (match List.find_opt (fun (i : issue) -> i.id = id_prefix) matches with
+     | Some issue -> Ok issue
+     | None ->
+       let ids = List.map (fun (i : issue) -> i.id) matches in
+       Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids))))
 
 let find_issue_by_id dir id_prefix =
   find_issue_by_id_in (load_issues dir) id_prefix
