@@ -206,4 +206,29 @@ not json at all
   assert (a3.Types.desc = "body only");                  (* absent field changes nothing *)
   print_endline "PASS: acceptance_criteria folded into desc";
 
+  (* --- beads types ditz has no counterpart for stay recoverable --- *)
+  let ty_text =
+    {|{"id":"ty-1","title":"t","status":"open","issue_type":"epic"}
+{"id":"ty-2","title":"t","status":"open","issue_type":"chore"}
+{"id":"ty-3","title":"t","status":"open","issue_type":"bug"}
+{"id":"ty-4","title":"t","status":"open","issue_type":"task"}|}
+  in
+  let tbeads, _ = Import_beads.parse_jsonl ty_text in
+  let mkt b = Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] b in
+  let prov_of i =
+    match find_ev i "imported from beads" with Some e -> e.Types.comment | None -> ""
+  in
+  let has hay nee =
+    let hl = String.length hay and nl = String.length nee in
+    let rec go i = i + nl <= hl && (String.sub hay i nl = nee || go (i + 1)) in go 0
+  in
+  let t1 = mkt (List.nth tbeads 0) and t2 = mkt (List.nth tbeads 1) in
+  let t3 = mkt (List.nth tbeads 2) and t4 = mkt (List.nth tbeads 3) in
+  assert (t1.Types.issue_type = Types.Task && has (prov_of t1) "beads_type=epic");
+  assert (t2.Types.issue_type = Types.Task && has (prov_of t2) "beads_type=chore");
+  (* a recognized alias renames without losing anything, so it adds no noise *)
+  assert (t3.Types.issue_type = Types.Bugfix && not (has (prov_of t3) "beads_type"));
+  assert (t4.Types.issue_type = Types.Task && not (has (prov_of t4) "beads_type"));
+  print_endline "PASS: unmapped beads types recorded in provenance";
+
   print_endline "\nAll import_beads tests passed!"

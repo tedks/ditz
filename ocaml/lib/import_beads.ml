@@ -247,10 +247,16 @@ let status_of_beads = function
   (* "open", "blocked" (blocked is derived from edges), unknown -> unstarted *)
   | _ -> Unstarted
 
-let type_of_beads = function
-  | "bug" | "bugfix" | "defect" -> Bugfix
-  | "feature" | "enhancement" -> Feature
-  | _ -> Task
+(* Recognized beads types. [None] means ditz has no counterpart, so the label
+   is unrecoverable after mapping and belongs in provenance -- unlike an alias
+   such as "bug" -> bugfix, which renames without losing anything. *)
+let type_of_beads_opt = function
+  | "bug" | "bugfix" | "defect" -> Some Bugfix
+  | "feature" | "enhancement" -> Some Feature
+  | "task" -> Some Task
+  | _ -> None
+
+let type_of_beads s = Option.value (type_of_beads_opt s) ~default:Task
 
 (** Map a bead to a ditz issue. [blocks] is the reciprocal set (ids this bead
     blocks), reconstructed across the whole import so both edge sides are
@@ -292,6 +298,10 @@ let to_issue ~reporter_fallback ~blocks ?(blocked_by_extra = []) (b : bead) : is
         Option.map (Printf.sprintf "assignee=%s") b.assignee;
         Option.map (Printf.sprintf "updated_at=%s") b.updated_at;
         Option.map (Printf.sprintf "beads_id=%s") b.orig_id;
+        (* ditz has three types; beads has more. "epic" and "chore" both land
+           on Task, so without this the original label is unrecoverable. *)
+        (if type_of_beads_opt b.itype = None then Some (Printf.sprintf "beads_type=%s" b.itype)
+         else None);
         (if b.other_deps = [] then None
          else Some ("deps=" ^ String.concat "," (List.map (fun (t, d) -> t ^ ":" ^ d) b.other_deps))) ]
   in
