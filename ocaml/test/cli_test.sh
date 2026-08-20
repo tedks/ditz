@@ -181,6 +181,60 @@ contains "lossy import says so" "Import INCOMPLETE" "$imp_out"
 contains "unstorable id still dropped" "skipped invalid issue id" "$imp_out"
 contains "dropped bead leaks no reciprocal edge" '"blocks":[]' "$("$BIN" show okw --json)"
 
+# An edge to an id that will not exist after the import is dropped and warned:
+# keeping it would leave `deps --check` calling the whole graph DANGLING.
+imp_out="$(printf '%s\n' \
+  '{"id":"dang-1","title":"real","status":"open","dependencies":[{"issue_id":"dang-1","depends_on_id":"ghost-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "dangling endpoint exits non-zero" 1 "$rc"
+contains "dangling endpoint warned" "dropped blocking edge to unknown id 'ghost-1'" "$imp_out"
+contains "dangling endpoint not stored" '"blocked_by":[]' "$("$BIN" show dang-1 --json)"
+
+# A rename onto an id an UNRELATED issue already holds must not swallow the
+# incoming issue; re-importing the same issue must stay a benign skip.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"occ-1","title":"the incumbent","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' '{"id":"occ.1","title":"different issue","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "destination collision exits non-zero" 1 "$rc"
+contains "destination collision warned" "an unrelated issue already holds that id" "$imp_out"
+contains "incumbent untouched" '"title":"the incumbent"' "$("$BIN" show occ-1 --json)"
+# ...whereas re-importing the same renamed issue is idempotent, not a collision
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"same.1","title":"mine","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' '{"id":"same.1","title":"mine","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "same-issue re-import exits 0" 0 "$rc"
+contains "same-issue re-import is a skip" "1 already present" "$imp_out"
+
+# An edge whose far side is an already-present issue must be written on BOTH
+# sides, or `deps --check` reports ONE-SIDED.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"ep-1","title":"epic","status":"open"}
+JSONL
+imp_out="$("$BIN" import - 2>&1 <<'JSONL'
+{"id":"ep-1","title":"epic","status":"open"}
+{"id":"ep-kid","title":"child","status":"open","dependencies":[{"issue_id":"ep-kid","depends_on_id":"ep-1","type":"parent-child"}]}
+JSONL
+)"; rc=$?
+check "completing an existing issue's edge exits 0" 0 "$rc"
+contains "far side completed" '"blocked_by":["ep-kid"]' "$("$BIN" show ep-1 --json)"
+# Scoped to this pair on purpose: the tracker also holds fixtures that are
+# deliberately cyclic/dangling to exercise `deps --check` itself, so global
+# cleanliness is not the assertion available here.
+case "$("$BIN" deps --check 2>&1 | grep -E 'ep-1|ep-kid')" in
+  *ONE-SIDED*|*DANGLING*) echo "FAIL: import left ep-1/ep-kid in an invalid state"; fail=1;;
+  *) echo "ok: imported edge is valid on both sides";;
+esac
+
+# A field that is present but of the wrong type is data we were handed and
+# dropped, so it warns; an absent field does not.
+imp_out="$(printf '%s\n' \
+  '{"id":"wt-1","title":"t","status":"open","acceptance_criteria":42}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "wrong-typed field exits non-zero" 1 "$rc"
+contains "wrong-typed field warned" "acceptance_criteria" "$imp_out"
+
 # beads parent-child becomes a real blocking edge: child blocks parent, so the
 # epic is not ready until its children close.
 "$BIN" import - >/dev/null 2>&1 <<'JSONL'

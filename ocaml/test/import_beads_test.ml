@@ -88,14 +88,17 @@ not json at all
   assert ((List.nth deduped 0).Import_beads.title = "first");  (* first kept *)
   print_endline "PASS: dedup keeps first, warns on duplicate id";
 
-  (* sanitize_edges: a blocking edge to an invalid (dotted) id is dropped + warned *)
-  let valid id = String.for_all (function
-    | 'a'..'z' | 'A'..'Z' | '0'..'9' | '-' | '_' -> true | _ -> false) id && id <> "" in
-  let bad_edge = { b1 with Import_beads.blockers = ["good-1"; "bad.id"] } in
-  let sed, swarns = Import_beads.sanitize_edges ~valid [bad_edge] in
+  (* sanitize_edges: an endpoint that will not exist after the import is
+     dropped + warned. "known" spans both the records being imported and what
+     the tracker already holds, so a syntactically fine but unknown id such as
+     "ghost-1" is dropped too -- keeping it would leave `deps --check` calling
+     the graph DANGLING. *)
+  let known id = List.mem id ["good-1"] in
+  let bad_edge = { b1 with Import_beads.blockers = ["good-1"; "bad.id"; "ghost-1"] } in
+  let sed, swarns = Import_beads.sanitize_edges ~known [bad_edge] in
   assert ((List.hd sed).Import_beads.blockers = ["good-1"]);
-  assert (List.length swarns = 1);
-  print_endline "PASS: sanitize_edges drops invalid endpoint, warns";
+  assert (List.length swarns = 2);
+  print_endline "PASS: sanitize_edges drops unknown endpoints (invalid AND dangling), warns";
 
   (* malformed `dependencies` (not an array) warns rather than vanishing *)
   let mal_text = {|{"id":"m-1","title":"t","dependencies":"oops"}|} in
@@ -147,13 +150,95 @@ not json at all
   assert (blocked.Import_beads.blockers = [ "g-53u-1" ]);
   print_endline "PASS: sanitize_ids renames dotted ids and rewrites edge endpoints";
 
-  (* a rename that collides with an existing id is loss, not a rename *)
-  let collide = {|{"id":"a-b","title":"first","status":"open"}
-{"id":"a.b","title":"second","status":"open"}|} in
-  let cbeads, _ = Import_beads.parse_jsonl collide in
-  let _, _, cwarns = Import_beads.sanitize_ids cbeads in
-  assert (List.length cwarns = 1);
-  print_endline "PASS: rename collision warns (would drop an issue)";
+  (* A rename onto an id another record owns is loss, not a rename: the issue
+     is refused and warned rather than silently merged. Both input orders. *)
+  let collide_a = {|{"id":"a-b","title":"incumbent","status":"open"}
+{"id":"a.b","title":"would be swallowed","status":"open"}|} in
+  let cb, _ = Import_beads.parse_jsonl collide_a in
+  let kept, cnotices, cwarns = Import_beads.sanitize_ids cb in
+  assert (List.length cwarns = 1 && cnotices = []);
+  assert (List.map (fun (b : Import_beads.bead) -> b.Import_beads.title) kept = [ "incumbent" ]);
+  let collide_b = {|{"id":"a.b","title":"renamed first","status":"open"}
+{"id":"a-b","title":"native second","status":"open"}|} in
+  let cb2, _ = Import_beads.parse_jsonl collide_b in
+  let kept2, _, cwarns2 = Import_beads.sanitize_ids cb2 in
+  (* the native owner is claimed up front, so the rename is the one refused *)
+  assert (List.length cwarns2 = 1);
+  assert (List.map (fun (b : Import_beads.bead) -> b.Import_beads.title) kept2 = [ "native second" ]);
+  (* two invalid ids sanitizing to the same target: first wins, second refused *)
+  let collide_c = {|{"id":"a.b","title":"first dotted","status":"open"}
+{"id":"a-b","title":"native","status":"open"}
+{"id":"a:b","title":"second punct","status":"open"}|} in
+  let cb3, _ = Import_beads.parse_jsonl collide_c in
+  let kept3, _, cwarns3 = Import_beads.sanitize_ids cb3 in
+  assert (List.length cwarns3 = 2 && List.length kept3 = 1);
+  print_endline "PASS: rename collision refuses the issue and warns (both orders, multi-way)";
+
+  (* A destination collision is judged by [taken]: an unrelated occupant is
+     refused, but re-importing the SAME issue is a benign rename. *)
+  let one = {|{"id":"a.b","title":"mine","status":"open"}|} in
+  let ob, _ = Import_beads.parse_jsonl one in
+  let _, _, tw = Import_beads.sanitize_ids ~taken:(fun _ -> true) ob in
+  assert (List.length tw = 1);
+  let okept, onotices, ow = Import_beads.sanitize_ids ~taken:(fun _ -> false) ob in
+  assert (ow = [] && List.length onotices = 1 && List.length okept = 1);
+  print_endline "PASS: destination collision refused; same-issue re-import stays a rename";
+
+  (* Identity proof: beads_id= provenance is matched whole-segment, so
+     beads_id=g-1 does not match a record whose provenance says beads_id=g-10. *)
+  let mk_prov c =
+    { (Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] (List.hd ob)) with
+      Types.log_events = [ { Types.time = "t"; who = "w"; what = "imported from beads"; comment = c } ] }
+  in
+  assert (Import_beads.issue_has_beads_id (mk_prov "priority=2; beads_id=g-1") "g-1");
+  assert (not (Import_beads.issue_has_beads_id (mk_prov "beads_id=g-10") "g-1"));
+  assert (not (Import_beads.issue_has_beads_id (mk_prov "priority=2") "g-1"));
+  print_endline "PASS: beads_id identity match is whole-segment, not substring";
+
+  (* An id renaming cannot rescue is still dropped, and that is loss. *)
+  let empty_id = {|{"id":"","title":"no id","status":"open"}|} in
+  let eb, _ = Import_beads.parse_jsonl empty_id in
+  let ekept, _, _ = Import_beads.sanitize_ids eb in
+  assert (List.length ekept = 1 && (List.hd ekept).Import_beads.id = "");
+  print_endline "PASS: an unrescuable id survives sanitize_ids for the caller to drop";
+
+  (* A present-but-wrong-typed field is data we were handed and discarded, so
+     it warns; an absent field stays silent. Regression guard for the
+     evaluation-order bug that read the warning ref before the accessors ran. *)
+  let bad_types =
+    {|{"id":"bt-1","title":"t","status":"open","acceptance_criteria":42,"labels":["ok",7],"priority":"nope"}
+{"id":"bt-2","title":"t","status":"open"}|}
+  in
+  let btb, btw = Import_beads.parse_jsonl bad_types in
+  assert (List.length btb = 2);
+  let has_sub hay nee =
+    let hl = String.length hay and nl = String.length nee in
+    let rec go i = i + nl <= hl && (String.sub hay i nl = nee || go (i + 1)) in go 0
+  in
+  assert (List.exists (fun w -> has_sub w "acceptance_criteria") btw);
+  assert (List.exists (fun w -> has_sub w "labels") btw);
+  assert (List.exists (fun w -> has_sub w "priority") btw);
+  assert (not (List.exists (fun w -> has_sub w "bt-2") btw));
+  assert ((List.nth btb 0).Import_beads.labels = [ "ok" ]);
+  print_endline "PASS: wrong-typed fields warn (and absent ones do not)";
+
+  (* A beads status ditz has no counterpart for maps to Unstarted but is kept. *)
+  let odd_status = {|{"id":"os-1","title":"t","status":"deferred"}|} in
+  let osb, _ = Import_beads.parse_jsonl odd_status in
+  let osi = Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] (List.hd osb) in
+  assert (osi.Types.status = Types.Unstarted);
+  (match find_ev osi "imported from beads" with
+   | Some e -> assert (has_sub e.Types.comment "beads_status=deferred")
+   | None -> failwith "expected beads_status provenance");
+  (* a recognized status, whatever its case, adds no noise *)
+  let ok_status = {|{"id":"os-2","title":"t","status":"Open"}|} in
+  let osb2, _ = Import_beads.parse_jsonl ok_status in
+  let osi2 = Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] (List.hd osb2) in
+  assert (osi2.Types.status = Types.Unstarted);
+  (match find_ev osi2 "imported from beads" with
+   | Some e -> assert (not (has_sub e.Types.comment "beads_status"))
+   | None -> ());
+  print_endline "PASS: unrecognized status kept in provenance; recognized (any case) adds none";
 
   (* a plain duplicate id is dedup's business, not sanitize_ids' — no double report *)
   let dup2 = {|{"id":"x-1","title":"one","status":"open"}
