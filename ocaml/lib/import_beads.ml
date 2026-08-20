@@ -241,7 +241,8 @@ let sanitize_id id =
     (function ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '_') as c -> c | _ -> '-')
     id
 
-let sanitize_ids ?(taken = fun _ -> false) (beads : bead list) :
+let sanitize_ids ?(taken = fun ~orig:_ ~renamed:_ -> false)
+    ?(resolve_external = fun _ -> None) (beads : bead list) :
     bead list * string list * string list =
   let notices = ref [] and warns = ref [] in
   let n = List.length beads in
@@ -268,7 +269,12 @@ let sanitize_ids ?(taken = fun _ -> false) (beads : bead list) :
              both, so nothing to do here and nothing to report twice. *)
           ()
         | None ->
-          if taken s then begin
+          (* [taken] is asked about THIS bead, not just the destination id.
+             "the tracker's occupant is really me" is a claim about one source
+             id: a destination-wide question answers yes if ANY bead in the file
+             could be the occupant, which handed the id to whichever bead came
+             first and refused the one that actually owned it. *)
+          if taken ~orig:b.id ~renamed:s then begin
             warns :=
               Printf.sprintf
                 "id '%s' cannot be renamed to '%s': an unrelated issue already holds that id in \
@@ -285,10 +291,17 @@ let sanitize_ids ?(taken = fun _ -> false) (beads : bead list) :
             Hashtbl.replace claimed s b.id
           end)
     beads;
-  (* An endpoint naming a record in this file follows that record's rename; one
-     naming anything else is sanitized the same way, so it can still match an
-     issue a previous run imported under the renamed id. *)
-  let map_id id = match Hashtbl.find_opt rename id with Some s -> s | None -> sanitize_id id in
+  (* An endpoint naming a record in this file follows that record's rename.
+     One naming anything else is handed to [resolve_external], which is the only
+     thing that can see the tracker. Blindly sanitizing it instead would wire
+     the edge to whatever issue happens to sit on the sanitized id -- an edge to
+     beads "x.y" would silently attach to an unrelated ditz "x-y". Unresolved
+     ids are left alone, so the caller's existence check drops them and warns. *)
+  let map_id id =
+    match Hashtbl.find_opt rename id with
+    | Some s -> s
+    | None -> ( match resolve_external id with Some s -> s | None -> id)
+  in
   let beads =
     List.filter (fun b -> not (Hashtbl.mem dropped b.id)) beads
     |> List.map (fun b ->

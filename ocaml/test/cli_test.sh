@@ -227,6 +227,28 @@ case "$("$BIN" deps --check 2>&1 | grep -E 'ep-1|ep-kid')" in
   *) echo "ok: imported edge is valid on both sides";;
 esac
 
+# An edge naming an id that is NOT in this file must not attach itself to an
+# unrelated issue that merely occupies the sanitized form of that id.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"alias-y","title":"unrelated incumbent","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' \
+  '{"id":"alias-n","title":"new","status":"open","dependencies":[{"issue_id":"alias-n","depends_on_id":"alias.y","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "aliasing endpoint exits non-zero" 1 "$rc"
+contains "aliasing endpoint dropped" "dropped blocking edge to unknown id 'alias.y'" "$imp_out"
+contains "unrelated incumbent not wired up" '"blocks":[]' "$("$BIN" show alias-y --json)"
+# ...but an endpoint DOES resolve when the occupant proves it came from that
+# beads id, which is the incremental-import case that must keep working.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"prov.y","title":"imported earlier","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' \
+  '{"id":"prov-n","title":"new","status":"open","dependencies":[{"issue_id":"prov-n","depends_on_id":"prov.y","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "vouched endpoint exits 0" 0 "$rc"
+contains "vouched endpoint connects" '"blocked_by":["prov-y"]' "$("$BIN" show prov-n --json)"
+
 # A field that is present but of the wrong type is data we were handed and
 # dropped, so it warns; an absent field does not.
 imp_out="$(printf '%s\n' \

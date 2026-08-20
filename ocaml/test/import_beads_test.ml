@@ -178,11 +178,47 @@ not json at all
      refused, but re-importing the SAME issue is a benign rename. *)
   let one = {|{"id":"a.b","title":"mine","status":"open"}|} in
   let ob, _ = Import_beads.parse_jsonl one in
-  let _, _, tw = Import_beads.sanitize_ids ~taken:(fun _ -> true) ob in
+  let _, _, tw = Import_beads.sanitize_ids ~taken:(fun ~orig:_ ~renamed:_ -> true) ob in
   assert (List.length tw = 1);
-  let okept, onotices, ow = Import_beads.sanitize_ids ~taken:(fun _ -> false) ob in
+  let okept, onotices, ow =
+    Import_beads.sanitize_ids ~taken:(fun ~orig:_ ~renamed:_ -> false) ob
+  in
   assert (ow = [] && List.length onotices = 1 && List.length okept = 1);
   print_endline "PASS: destination collision refused; same-issue re-import stays a rename";
+
+  (* [taken] is answered per bead, not per destination id. The tracker holds
+     'a-b' descended from beads 'a.b'; the file also contains an unrelated
+     'a:b', which sanitizes to the same target and comes FIRST. A
+     destination-wide predicate answered "not taken" for both (because some
+     bead in the file matched), handed 'a-b' to the unrelated 'a:b', and then
+     refused the bead that actually owned it. *)
+  let order_text = {|{"id":"a:b","title":"unrelated","status":"open"}
+{"id":"a.b","title":"the real owner","status":"open"}|} in
+  let ordb, _ = Import_beads.parse_jsonl order_text in
+  let okept2, _, owarns2 =
+    Import_beads.sanitize_ids
+      ~taken:(fun ~orig ~renamed -> renamed = "a-b" && orig <> "a.b")
+      ordb
+  in
+  let kept_titles = List.map (fun (b : Import_beads.bead) -> b.Import_beads.title) okept2 in
+  assert (kept_titles = [ "the real owner" ]);
+  assert (List.length owarns2 = 1);
+  print_endline "PASS: taken is per-bead, so the real owner keeps its id regardless of file order";
+
+  (* An endpoint naming no record in this file is only rewritten when
+     [resolve_external] vouches for it. Left to a blind sanitize, an edge to
+     beads 'x.y' would attach to whatever unrelated issue occupies 'x-y'. *)
+  let ext_text =
+    {|{"id":"e-1","title":"t","status":"open","dependencies":[{"issue_id":"e-1","depends_on_id":"x.y","type":"blocks"}]}|}
+  in
+  let extb, _ = Import_beads.parse_jsonl ext_text in
+  let no_vouch, _, _ = Import_beads.sanitize_ids extb in
+  assert ((List.hd no_vouch).Import_beads.blockers = [ "x.y" ]);  (* left unknown -> caller drops it *)
+  let vouched, _, _ =
+    Import_beads.sanitize_ids ~resolve_external:(fun id -> if id = "x.y" then Some "x-y" else None) extb
+  in
+  assert ((List.hd vouched).Import_beads.blockers = [ "x-y" ]);
+  print_endline "PASS: out-of-file endpoints are rewritten only when vouched for";
 
   (* Identity proof: beads_id= provenance is matched whole-segment, so
      beads_id=g-1 does not match a record whose provenance says beads_id=g-10. *)

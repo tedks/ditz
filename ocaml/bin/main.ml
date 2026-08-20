@@ -1251,13 +1251,21 @@ let import_cmd =
          refused rather than silently merged. *)
       let beads, rename_notices, rename_warns =
         Ditz.Import_beads.sanitize_ids
-          ~taken:(fun renamed ->
-            Hashtbl.mem existing_ids renamed
-            && not
-                 (List.exists
-                    (fun (b : Ditz.Import_beads.bead) ->
-                      Ditz.Import_beads.sanitize_id b.id = renamed && is_same_beads_issue renamed b.id)
-                    beads))
+          ~taken:(fun ~orig ~renamed ->
+            Hashtbl.mem existing_ids renamed && not (is_same_beads_issue renamed orig))
+          (* Resolve an endpoint that names no record in this file. An id the
+             tracker already holds resolves to itself. A beads id needing a
+             rename resolves ONLY to an issue that proves it descends from that
+             beads id; otherwise the sanitized form could name an unrelated
+             issue that merely happens to occupy it, and the edge would attach
+             to the wrong thing. Unresolved ids fall through to the existence
+             check, which drops and warns. *)
+          ~resolve_external:(fun id ->
+            if Hashtbl.mem existing_ids id then Some id
+            else
+              let s = Ditz.Import_beads.sanitize_id id in
+              if s <> id && Hashtbl.mem existing_ids s && is_same_beads_issue s id then Some s
+              else None)
           beads
       in
       (* Drop in-file duplicate ids (keep first). *)
@@ -1309,12 +1317,16 @@ let import_cmd =
             let blocks = Option.value (Hashtbl.find_opt reciprocal b.id) ~default:[] in
             let blocked_by_extra = Option.value (Hashtbl.find_opt children b.id) ~default:[] in
             let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks ~blocked_by_extra b in
-            (* Every edge this new issue asserts needs its other side present. *)
-            List.iter (fun t -> note_existing_edge ~on:t ~blocks:[] ~blocked_by:[ issue.id ]) issue.blocks;
-            List.iter (fun t -> note_existing_edge ~on:t ~blocks:[ issue.id ] ~blocked_by:[]) issue.blocked_by;
             (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
                      config.issue_dir issue with
-             | Ok () -> created := b.id :: !created
+             | Ok () ->
+               created := b.id :: !created;
+               (* Queued only now that the issue is actually on disk. Queuing
+                  before the save meant a failed save still pointed existing
+                  issues at an id that was never written -- manufacturing the
+                  dangling edge this whole change exists to prevent. *)
+               List.iter (fun t -> note_existing_edge ~on:t ~blocks:[] ~blocked_by:[ issue.id ]) issue.blocks;
+               List.iter (fun t -> note_existing_edge ~on:t ~blocks:[ issue.id ] ~blocked_by:[]) issue.blocked_by
              | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings))
         beads;
       (* Complete the far side of every edge that points at a pre-existing
