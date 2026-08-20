@@ -1179,7 +1179,24 @@ let sync_cmd =
 
 let import_cmd =
   let doc = "Import issues from a beads `bd export` JSONL file" in
-  let info = Cmd.info "import" ~doc in
+  let man =
+    [ `S Manpage.s_description;
+      `P "Imports issues from a beads `bd export` JSONL file. The import is \
+          idempotent: an issue whose id is already present is left untouched.";
+      `P "Ids beads allows but ditz does not (e.g. dotted child ids such as \
+          $(b,goals-53u.1)) are renamed, not dropped, and every edge endpoint \
+          is rewritten to match. The original id is recorded in the issue's \
+          provenance. A beads $(b,parent-child) dependency becomes a blocking \
+          edge from child to parent, since an epic is not done until its \
+          children are. $(b,acceptance_criteria) is folded into the issue \
+          description.";
+      `P "Exit status is 0 only when every issue imported without data loss. \
+          Anything dropped — an unparseable line, a colliding id, an issue \
+          ditz still cannot store, a dependency edge to an unknown id — is \
+          reported as a warning and exits non-zero. Renames are lossless and \
+          reported as notices, which do not affect the exit status." ]
+  in
+  let info = Cmd.info "import" ~doc ~man in
   let file_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"FILE" ~doc:"JSONL file ('-' or omitted = stdin)") in
   let format_opt = Arg.(value & opt string "beads" & info ["format"] ~docv:"FMT" ~doc:"Source format (only 'beads' supported)") in
   let run file format json quiet () =
@@ -1201,11 +1218,17 @@ let import_cmd =
       let beads, parse_warns = Ditz.Import_beads.parse_jsonl text in
       let valid id = Result.is_ok (Ditz.Storage.validate_id id) in
       (* Drop in-file duplicate ids (keep first). *)
+      (* Rename ids ditz can't store (beads' dotted child ids) rather than
+         dropping the issue, rewriting every edge endpoint to match. This runs
+         BEFORE dedup and reciprocal reconstruction so collisions are dedup's
+         to resolve and no stale id survives in a reverse edge. *)
+      let beads, rename_notices, rename_warns = Ditz.Import_beads.sanitize_ids beads in
       let beads, dup_warns = Ditz.Import_beads.dedup beads in
-      (* Drop whole beads whose OWN id ditz can't store, BEFORE reciprocal
-         reconstruction — otherwise a skipped invalid issue would still leak its
-         id into a valid issue's `blocks` via the reverse edge (save_issue only
-         validates an issue's own id, not its relation ids). [council convergence] *)
+      (* Anything still unstorable after renaming (an empty id) is dropped, and
+         that must happen BEFORE reciprocal reconstruction — otherwise a skipped
+         issue would still leak its id into a valid issue's `blocks` via the
+         reverse edge (save_issue only validates an issue's own id, not its
+         relation ids). [council convergence] *)
       let beads, id_warns =
         let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> valid b.id) beads in
         (ok, List.map (fun (b : Ditz.Import_beads.bead) -> Printf.sprintf "skipped invalid issue id '%s'" b.id) bad)
@@ -1213,8 +1236,10 @@ let import_cmd =
       (* Drop dependency edges whose endpoint id ditz can't store. *)
       let beads, edge_warns = Ditz.Import_beads.sanitize_edges ~valid beads in
       let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
+      let children = Ditz.Import_beads.children_by_parent beads in
       let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
-      let warnings = ref (parse_warns @ dup_warns @ id_warns @ edge_warns) in
+      let warnings = ref (parse_warns @ rename_warns @ dup_warns @ id_warns @ edge_warns) in
+      let notices = rename_notices in
       let created = ref [] and skipped = ref [] in
       List.iter
         (fun (b : Ditz.Import_beads.bead) ->
@@ -1224,7 +1249,8 @@ let import_cmd =
           | Ok _ -> skipped := b.id :: !skipped
           | Error _ ->
             let blocks = try Hashtbl.find reciprocal b.id with Not_found -> [] in
-            let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks b in
+            let blocked_by_extra = try Hashtbl.find children b.id with Not_found -> [] in
+            let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks ~blocked_by_extra b in
             (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
                      config.issue_dir issue with
              | Ok () -> created := b.id :: !created
@@ -1235,15 +1261,22 @@ let import_cmd =
       (match mode with
        | Json ->
          let lst l = "[" ^ String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string s)) l) ^ "]" in
-         Fmt.pr {|{"created":%s,"skipped":%s,"warnings":%s}@.|}
-           (lst created) (lst skipped) (lst warnings)
+         Fmt.pr {|{"created":%s,"skipped":%s,"warnings":%s,"notices":%s}@.|}
+           (lst created) (lst skipped) (lst warnings) (lst notices)
        | Quiet -> List.iter (fun id -> Fmt.pr "%s@." id) created
        | Human ->
+         List.iter (fun n -> Fmt.epr "note: %s@." n) notices;
          List.iter (fun w -> Fmt.epr "warning: %s@." w) warnings;
          Fmt.pr "Imported %d issue(s) from beads; %d already present (skipped).@."
-           (List.length created) (List.length skipped));
-      (* Warnings alone don't fail the import; an outright read/format error did. *)
-      0
+           (List.length created) (List.length skipped);
+         if warnings <> [] then
+           Fmt.epr "Import INCOMPLETE: %d problem(s) above lost data; exiting non-zero.@."
+             (List.length warnings));
+      (* Exit status is the only signal a script reliably reads, so anything
+         that lost data fails the command. Renames are lossless and stay
+         notices, and an already-present issue is idempotent re-import, not a
+         problem — neither affects the status. *)
+      if warnings = [] then 0 else 1
   in
   Cmd.v info Term.(const run $ file_arg $ format_opt $ json_flag $ quiet_flag $ setup_log_term)
 

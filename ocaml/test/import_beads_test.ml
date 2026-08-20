@@ -127,4 +127,83 @@ not json at all
   assert ((List.hd nbeads).Import_beads.desc = "line1\nline2\nline3");
   print_endline "PASS: escaped newline in description";
 
+  (* --- id sanitization: rename instead of drop, edges follow --- *)
+  let dotted =
+    {|{"id":"g-53u","title":"epic","status":"open"}
+{"id":"g-53u.1","title":"child","status":"open","dependencies":[{"issue_id":"g-53u.1","depends_on_id":"g-53u","type":"parent-child"}]}
+{"id":"g-9","title":"blocked by child","status":"open","dependencies":[{"issue_id":"g-9","depends_on_id":"g-53u.1","type":"blocks"}]}|}
+  in
+  let dbeads, dwarns = Import_beads.parse_jsonl dotted in
+  assert (dwarns = []);
+  let dbeads, notices, rwarns = Import_beads.sanitize_ids dbeads in
+  assert (rwarns = []);                          (* a rename loses nothing *)
+  assert (List.length notices = 1);
+  let ids = List.map (fun (b : Import_beads.bead) -> b.Import_beads.id) dbeads in
+  assert (ids = [ "g-53u"; "g-53u-1"; "g-9" ]);
+  (* the endpoint of an edge naming the renamed issue is rewritten too *)
+  let child = List.nth dbeads 1 and blocked = List.nth dbeads 2 in
+  assert (child.Import_beads.parents = [ "g-53u" ]);
+  assert (child.Import_beads.orig_id = Some "g-53u.1");
+  assert (blocked.Import_beads.blockers = [ "g-53u-1" ]);
+  print_endline "PASS: sanitize_ids renames dotted ids and rewrites edge endpoints";
+
+  (* a rename that collides with an existing id is loss, not a rename *)
+  let collide = {|{"id":"a-b","title":"first","status":"open"}
+{"id":"a.b","title":"second","status":"open"}|} in
+  let cbeads, _ = Import_beads.parse_jsonl collide in
+  let _, _, cwarns = Import_beads.sanitize_ids cbeads in
+  assert (List.length cwarns = 1);
+  print_endline "PASS: rename collision warns (would drop an issue)";
+
+  (* a plain duplicate id is dedup's business, not sanitize_ids' — no double report *)
+  let dup2 = {|{"id":"x-1","title":"one","status":"open"}
+{"id":"x-1","title":"two","status":"open"}|} in
+  let d2, _ = Import_beads.parse_jsonl dup2 in
+  let _, _, d2warns = Import_beads.sanitize_ids d2 in
+  assert (d2warns = []);
+  print_endline "PASS: plain duplicate id is not double-reported as a collision";
+
+  (* --- parent-child becomes a real edge in both directions --- *)
+  let kids = Import_beads.children_by_parent dbeads in
+  assert (Hashtbl.find kids "g-53u" = [ "g-53u-1" ]);
+  let recip2 = Import_beads.reciprocal_blocks dbeads in
+  let child_issue =
+    Import_beads.to_issue ~reporter_fallback:"F <f@e.co>"
+      ~blocks:(try Hashtbl.find recip2 "g-53u-1" with Not_found -> [])
+      ~blocked_by_extra:[] child
+  in
+  (* child blocks its parent... *)
+  assert (List.mem "g-53u" child_issue.Types.blocks);
+  (* ...and still records that g-9 depends on it *)
+  assert (List.mem "g-9" child_issue.Types.blocks);
+  let parent_issue =
+    Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[]
+      ~blocked_by_extra:(Hashtbl.find kids "g-53u") (List.hd dbeads)
+  in
+  assert (parent_issue.Types.blocked_by = [ "g-53u-1" ]);
+  print_endline "PASS: parent-child maps to child-blocks-parent, both directions";
+
+  (* the renamed issue keeps its original beads id in provenance *)
+  (match find_ev child_issue "imported from beads" with
+   | Some e ->
+     let has s = let hl=String.length e.Types.comment and nl=String.length s in
+       let rec go i = i+nl<=hl && (String.sub e.Types.comment i nl = s || go (i+1)) in go 0 in
+     assert (has "beads_id=g-53u.1")
+   | None -> failwith "expected provenance with original beads id");
+  print_endline "PASS: pre-rename beads id preserved in provenance";
+
+  (* --- acceptance_criteria is folded into desc, never dropped --- *)
+  let acc_text =
+    {|{"id":"ac-1","title":"t","status":"open","description":"body here","acceptance_criteria":"must not crash"}
+{"id":"ac-2","title":"t","status":"open","acceptance_criteria":"only criteria"}
+{"id":"ac-3","title":"t","status":"open","description":"body only"}|}
+  in
+  let abeads, _ = Import_beads.parse_jsonl acc_text in
+  let mk b = Import_beads.to_issue ~reporter_fallback:"F <f@e.co>" ~blocks:[] b in
+  let a1 = mk (List.nth abeads 0) and a2 = mk (List.nth abeads 1) and a3 = mk (List.nth abeads 2) in
+  assert (a1.Types.desc = "body here\n\nAcceptance: must not crash");
+  assert (a2.Types.desc = "Acceptance: only criteria");  (* no empty leading blank *)
+  assert (a3.Types.desc = "body only");                  (* absent field changes nothing *)
+  print_endline "PASS: acceptance_criteria folded into desc";
+
   print_endline "\nAll import_beads tests passed!"

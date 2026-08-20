@@ -28,12 +28,22 @@ type bead = {
   external_ref : string option;
   labels : string list;
   notes : string option;
+  acceptance : string option;
+  (* Pre-rename id, when [sanitize_ids] had to rewrite it. Kept so the original
+     beads id survives in the issue's provenance and stays greppable. *)
+  orig_id : string option;
   (* ids that block THIS issue (depends_on_id of each type="blocks" dep) *)
   blockers : string list;
-  (* non-"blocks" deps as (type, depends_on_id): preserved as provenance, not
-     turned into graph edges — their direction (esp. parent-child) isn't safe
-     to guess without real data. Revisit when migrating a tracker that uses
-     them (goals); predictionbook is flat. *)
+  (* ids of this issue's parents (depends_on_id of each type="parent-child").
+     A parent is an epic that is not done until its children are, so each child
+     is imported as BLOCKING its parent. The direction was deliberately left
+     unmapped until a tracker that actually uses these edges was migrated;
+     goals (2026-08) is that tracker, and its staging epic is exactly this
+     shape, so the guess is now grounded in real data. *)
+  parents : string list;
+  (* deps that are neither "blocks" nor "parent-child", as (type,
+     depends_on_id): preserved as provenance, not turned into graph edges —
+     their direction still isn't safe to guess. predictionbook is flat. *)
   other_deps : (string * string) list;
 }
 
@@ -55,26 +65,28 @@ let str_list_field kvs k =
   | Some (`A items) -> List.filter_map (function `String s -> Some s | _ -> None) items
   | _ -> []
 
-(* beads deps live on the blocked issue: {depends_on_id, type:"blocks"}.
-   We keep only type="blocks" edges as graph blockers; other types
-   (related/parent-child/discovered-from) are surfaced as provenance, not
-   silently turned into blocking edges with a guessed direction. Returns
-   (blockers, other_deps, warnings) — a present-but-malformed `dependencies`
-   field warns rather than vanishing, since a dropped edge is real data loss. *)
+(* beads deps live on the dependent issue: {depends_on_id, type}. "blocks"
+   becomes a graph blocker and "parent-child" a parent edge (depends_on_id is
+   the parent, recorded on the child); every other type is surfaced as
+   provenance rather than silently becoming an edge with a guessed direction.
+   Returns (blockers, parents, other_deps, warnings) — a present-but-malformed
+   `dependencies` field warns rather than vanishing, since a dropped edge is
+   real data loss. *)
 let parse_deps kvs =
   match List.assoc_opt "dependencies" kvs with
-  | None | Some `Null -> ([], [], [])
+  | None | Some `Null -> ([], [], [], [])
   | Some (`A items) ->
     List.fold_left
-      (fun (blk, other, warns) item ->
+      (fun (blk, par, other, warns) item ->
         let f = fields item in
         match str_field f "type", str_field f "depends_on_id" with
-        | Some "blocks", Some dep -> (dep :: blk, other, warns)
-        | Some t, Some dep -> (blk, (t, dep) :: other, warns)
-        | _ -> (blk, other, "dependency entry missing type/depends_on_id" :: warns))
-      ([], [], []) items
-    |> fun (blk, other, w) -> (List.rev blk, List.rev other, List.rev w)
-  | Some _ -> ([], [], [ "`dependencies` is not an array; dependencies ignored" ])
+        | Some "blocks", Some dep -> (dep :: blk, par, other, warns)
+        | Some ("parent-child" | "parent_child"), Some dep -> (blk, dep :: par, other, warns)
+        | Some t, Some dep -> (blk, par, (t, dep) :: other, warns)
+        | _ -> (blk, par, other, "dependency entry missing type/depends_on_id" :: warns))
+      ([], [], [], []) items
+    |> fun (blk, par, other, w) -> (List.rev blk, List.rev par, List.rev other, List.rev w)
+  | Some _ -> ([], [], [], [ "`dependencies` is not an array; dependencies ignored" ])
 
 (* Returns the bead plus any field-level warnings (e.g. malformed deps). *)
 let bead_of_yaml (y : Yaml.value) : (bead * string list, string) result =
@@ -83,7 +95,7 @@ let bead_of_yaml (y : Yaml.value) : (bead * string list, string) result =
   | None, _ -> Error "line has no string id"
   | _, None -> Error "line has no string title"
   | Some id, Some title ->
-    let blockers, other_deps, dep_warns = parse_deps kvs in
+    let blockers, parents, other_deps, dep_warns = parse_deps kvs in
     Ok ({
       id; title;
       desc = Option.value (str_field kvs "description") ~default:"";
@@ -100,7 +112,10 @@ let bead_of_yaml (y : Yaml.value) : (bead * string list, string) result =
       external_ref = str_field kvs "external_ref";
       labels = str_list_field kvs "labels";
       notes = str_field kvs "notes";
+      acceptance = str_field kvs "acceptance_criteria";
+      orig_id = None;
       blockers;
+      parents;
       other_deps;
     }, List.map (Printf.sprintf "%s: %s" id) dep_warns)
 
@@ -136,6 +151,69 @@ let dedup (beads : bead list) : bead list * string list =
     ([], []) beads
   |> fun (kept, warns) -> (List.rev kept, List.rev warns)
 
+(** Rewrite ids ditz cannot store into ones it can, across an issue's own id
+    AND every edge endpoint, so the graph stays connected. beads mints dotted
+    child ids ("goals-53u.1") that ditz rejects, and dropping those issues
+    loses whole subtrees; renaming keeps them, and the pre-rename id is carried
+    on [orig_id] so it still appears in the issue's provenance.
+
+    Renaming is lossless, so it yields NOTICES. A rename that lands on an id
+    another record already uses is different: [dedup] would then keep only the
+    first and the second issue would vanish. That is real loss, so it WARNS.
+    Returns (beads, notices, warnings). *)
+let sanitize_id id =
+  String.map
+    (function ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '_') as c -> c | _ -> '-')
+    id
+
+let sanitize_ids (beads : bead list) : bead list * string list * string list =
+  let notices = ref [] and warns = ref [] in
+  (* Build the rename map over every id first, so an edge endpoint resolves
+     even when the record it names appears later in the file (or not at all). *)
+  let rename = Hashtbl.create (List.length beads) in
+  List.iter
+    (fun b ->
+      let s = sanitize_id b.id in
+      if s <> b.id && not (Hashtbl.mem rename b.id) then begin
+        notices :=
+          Printf.sprintf "renamed id '%s' -> '%s' (ditz ids allow only [A-Za-z0-9_-])" b.id s
+          :: !notices;
+        Hashtbl.add rename b.id s
+      end)
+    beads;
+  let map_id id = match Hashtbl.find_opt rename id with Some s -> s | None -> id in
+  (* Collisions are detected on (old, new) pairs rather than on the final ids,
+     so a plain duplicate id in the input stays [dedup]'s business and is not
+     double-reported here. *)
+  let first_for = Hashtbl.create (List.length beads) in
+  List.iter
+    (fun b ->
+      let new_id = map_id b.id in
+      match Hashtbl.find_opt first_for new_id with
+      | None -> Hashtbl.add first_for new_id b.id
+      | Some prev when prev <> b.id ->
+        warns :=
+          Printf.sprintf "renamed id '%s' collides with '%s' (both become '%s'); only the first is kept"
+            b.id prev new_id
+          :: !warns
+      | Some _ -> ())
+    beads;
+  let beads =
+    List.map
+      (fun b ->
+        let new_id = map_id b.id in
+        {
+          b with
+          id = new_id;
+          orig_id = (if new_id = b.id then b.orig_id else Some b.id);
+          blockers = List.map map_id b.blockers;
+          parents = List.map map_id b.parents;
+          other_deps = List.map (fun (t, d) -> (t, map_id d)) b.other_deps;
+        })
+      beads
+  in
+  (beads, List.rev !notices, List.rev !warns)
+
 (** Drop dependency endpoint ids that aren't valid ditz ids (e.g. dotted),
     warning per drop — they can't be real cross-references and would otherwise
     be guaranteed dangling refs. [valid] is the id predicate (Storage.validate_id).
@@ -144,13 +222,20 @@ let sanitize_edges ~valid (beads : bead list) : bead list * string list =
   List.fold_left
     (fun (acc, warns) b ->
       let good, bad = List.partition valid b.blockers in
+      let good_parents, bad_parents = List.partition valid b.parents in
       let warns =
         List.fold_left
           (fun w bad_id ->
             Printf.sprintf "%s: dropped blocking edge to invalid id '%s'" b.id bad_id :: w)
           warns bad
       in
-      ({ b with blockers = good } :: acc, warns))
+      let warns =
+        List.fold_left
+          (fun w bad_id ->
+            Printf.sprintf "%s: dropped parent edge to invalid id '%s'" b.id bad_id :: w)
+          warns bad_parents
+      in
+      ({ b with blockers = good; parents = good_parents } :: acc, warns))
     ([], []) beads
   |> fun (acc, warns) -> (List.rev acc, List.rev warns)
 
@@ -170,7 +255,21 @@ let type_of_beads = function
 (** Map a bead to a ditz issue. [blocks] is the reciprocal set (ids this bead
     blocks), reconstructed across the whole import so both edge sides are
     consistent. [reporter_fallback] is used when the bead names no owner. *)
-let to_issue ~reporter_fallback ~blocks (b : bead) : issue =
+let dedup_strings l =
+  List.rev (List.fold_left (fun acc x -> if List.mem x acc then acc else x :: acc) [] l)
+
+(* beads' acceptance_criteria has no ditz counterpart, and ditz keeps its model
+   deliberately small, so the prose is folded into the description rather than
+   growing the schema for one importer. Losing it is not an option: it is the
+   definition of done. *)
+let desc_with_acceptance (b : bead) =
+  match b.acceptance with
+  | Some a when String.trim a <> "" ->
+    if String.trim b.desc = "" then "Acceptance: " ^ String.trim a
+    else b.desc ^ "\n\nAcceptance: " ^ String.trim a
+  | _ -> b.desc
+
+let to_issue ~reporter_fallback ~blocks ?(blocked_by_extra = []) (b : bead) : issue =
   let who = Option.value b.created_by ~default:"beads-import" in
   let reporter =
     match b.created_by, b.owner with
@@ -192,6 +291,7 @@ let to_issue ~reporter_fallback ~blocks (b : bead) : issue =
         (if b.labels = [] then None else Some ("labels=" ^ String.concat "," b.labels));
         Option.map (Printf.sprintf "assignee=%s") b.assignee;
         Option.map (Printf.sprintf "updated_at=%s") b.updated_at;
+        Option.map (Printf.sprintf "beads_id=%s") b.orig_id;
         (if b.other_deps = [] then None
          else Some ("deps=" ^ String.concat "," (List.map (fun (t, d) -> t ^ ":" ^ d) b.other_deps))) ]
   in
@@ -212,7 +312,7 @@ let to_issue ~reporter_fallback ~blocks (b : bead) : issue =
   {
     id = b.id;
     title = b.title;
-    desc = b.desc;
+    desc = desc_with_acceptance b;
     issue_type = type_of_beads b.itype;
     component = "default";
     release = None;
@@ -222,10 +322,27 @@ let to_issue ~reporter_fallback ~blocks (b : bead) : issue =
     creation_time = created_at;
     references = (match b.external_ref with Some r when r <> "" -> [ r ] | _ -> []);
     log_events;
-    blocks;
-    blocked_by = b.blockers;
+    (* A child blocks its parent: the epic is not done until its children are. *)
+    blocks = dedup_strings (blocks @ b.parents);
+    blocked_by = dedup_strings (b.blockers @ blocked_by_extra);
     file_refs = [];
   }
+
+(** Children of each parent id, from the parent-child edges recorded on the
+    children. Feeds the parent's [blocked_by], the reciprocal of the child's
+    [blocks]. File order is preserved so the epic reads in the order its
+    children were created. *)
+let children_by_parent (beads : bead list) : (string, string list) Hashtbl.t =
+  let tbl = Hashtbl.create (List.length beads) in
+  List.iter
+    (fun b ->
+      List.iter
+        (fun parent ->
+          let cur = try Hashtbl.find tbl parent with Not_found -> [] in
+          if not (List.mem b.id cur) then Hashtbl.replace tbl parent (cur @ [ b.id ]))
+        b.parents)
+    beads;
+  tbl
 
 (** Reconstruct the reciprocal "blocks" set for every id from all beads'
     blocker edges (beads only records the blocked side). *)

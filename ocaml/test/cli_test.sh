@@ -154,18 +154,42 @@ out="$(printf '%s\n' '{"id":"imp-1","title":"imported open","status":"open"}' | 
 contains "re-import is idempotent" "1 already present" "$out"
 # unknown format rejected
 out="$(echo '{}' | "$BIN" import - --format jira 2>&1)"; check "import unknown format rejected" 1 "$?"
-# council-convergence regression: an invalid-id bead that blocks a valid issue
-# must NOT leak its id into the valid issue's blocks (the invalid bead is
-# skipped, so the reciprocal edge must be dropped too).
+# An id ditz can't store is RENAMED, not dropped: the issue survives and the
+# reciprocal edge is rewritten to the new id. Renaming is lossless, so it is a
+# note and the exit status stays 0.
 imp_out="$(printf '%s\n' \
   '{"id":"okv","title":"valid one","status":"open"}' \
   '{"id":"bad.v","title":"invalid id","status":"open","dependencies":[{"issue_id":"bad.v","depends_on_id":"okv","type":"blocks"}]}' \
-  | "$BIN" import - 2>&1)"
-contains "invalid-id bead warned" "invalid issue id 'bad.v'" "$imp_out"
-contains "valid issue has no leaked invalid blocks" '"blocks":[]' "$("$BIN" show okv --json)"
-# the skipped invalid id must not appear in the graph at all (tracker has other
-# fixtures, so check the leak specifically, not global cleanliness)
+  | "$BIN" import - 2>&1)"; rc=$?
+check "lossless rename import exits 0" 0 "$rc"
+contains "invalid id renamed, not skipped" "renamed id 'bad.v' -> 'bad-v'" "$imp_out"
+contains "renamed bead is present" '"title":"invalid id"' "$("$BIN" show bad-v --json)"
+contains "original beads id kept in provenance" "beads_id=bad.v" "$("$BIN" show bad-v)"
+contains "reciprocal edge follows the rename" '"blocks":["bad-v"]' "$("$BIN" show okv --json)"
+# council-convergence regression: the pre-rename id must not survive anywhere in
+# the graph (tracker has other fixtures, so check this leak specifically).
 case "$("$BIN" deps --check 2>&1)" in *bad.v*) echo "FAIL: bad.v leaked into graph"; fail=1;; *) echo "ok: no bad.v leak in deps --check";; esac
+
+# An id that renaming cannot rescue is still dropped -- and that is data loss,
+# so it must warn AND exit non-zero. Its reciprocal edge must not leak either.
+imp_out="$(printf '%s\n' \
+  '{"id":"okw","title":"valid two","status":"open"}' \
+  '{"id":"","title":"empty id","status":"open","dependencies":[{"issue_id":"","depends_on_id":"okw","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "lossy import exits non-zero" 1 "$rc"
+contains "lossy import says so" "Import INCOMPLETE" "$imp_out"
+contains "unstorable id still dropped" "skipped invalid issue id" "$imp_out"
+contains "dropped bead leaks no reciprocal edge" '"blocks":[]' "$("$BIN" show okw --json)"
+
+# beads parent-child becomes a real blocking edge: child blocks parent, so the
+# epic is not ready until its children close.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"epic-p","title":"epic","status":"open"}
+{"id":"kid-a","title":"child a","status":"open","acceptance_criteria":"the bar is met","dependencies":[{"issue_id":"kid-a","depends_on_id":"epic-p","type":"parent-child"}]}
+JSONL
+contains "child blocks its parent" '"blocks":["epic-p"]' "$("$BIN" show kid-a --json)"
+contains "parent is blocked by its child" '"blocked_by":["kid-a"]' "$("$BIN" show epic-p --json)"
+contains "acceptance_criteria folded into desc" "Acceptance: the bar is met" "$("$BIN" show kid-a)"
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"
