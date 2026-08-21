@@ -1231,15 +1231,27 @@ let import_cmd =
       (* An import is incremental, not a fresh world: the tracker already holds
          issues, and both id collisions and edge endpoints have to be judged
          against them. Load once. *)
-      (* Both halves come from ONE scan. Asking twice lets the two answers
-         disagree if a file's readability changes in between, and an id missing
-         from both is exactly the state that lets a write clobber data it could
-         not read. *)
-      let existing, unreadable_list = Ditz.Storage.load_issues_classified config.issue_dir in
+      (* Both halves come from ONE scan. Asking twice lets the answers disagree
+         if a file changes in between, and an id missing from both is exactly
+         the state that lets a write clobber data it could not read.
+
+         An enumeration failure is fatal here rather than an empty store: this
+         scan is the overwrite protection, and "could not look" must never read
+         as "nothing is there". *)
+      match Ditz.Storage.load_issues_classified config.issue_dir with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: cannot enumerate existing issues, so an import could overwrite them: %s@." e;
+        1
+      | Ok (existing, occupied_list) ->
       let existing_ids = Hashtbl.create (List.length existing) in
       List.iter (fun (i : Ditz.Types.issue) -> Hashtbl.replace existing_ids i.id i) existing;
-      let unreadable = Hashtbl.create (List.length unreadable_list) in
-      List.iter (fun id -> Hashtbl.replace unreadable id ()) unreadable_list;
+      (* Keyed by FILENAME, so it covers an unreadable file and a file whose
+         contents name a different id -- both are targets a write would land
+         on, and neither shows up in existing_ids. *)
+      let occupied = Hashtbl.create (List.length occupied_list) in
+      List.iter (fun id -> Hashtbl.replace occupied id ()) occupied_list;
+      (* Occupied by something that is not the readable issue of that id. *)
+      let blocked id = Hashtbl.mem occupied id && not (Hashtbl.mem existing_ids id) in
       (* Does the issue already stored under [id] descend from beads issue
          [beads_id]? Re-importing the same renamed issue must stay the benign
          idempotent skip; only an UNRELATED occupant is a collision. Identity is
@@ -1258,7 +1270,10 @@ let import_cmd =
       let beads, rename_notices, rename_warns =
         Ditz.Import_beads.sanitize_ids
           ~taken:(fun ~orig ~renamed ->
-            Hashtbl.mem existing_ids renamed && not (is_same_beads_issue renamed orig))
+            (* An occupied id is taken even when we cannot read what occupies
+               it: granting the rename would only get the issue refused later. *)
+            (Hashtbl.mem occupied renamed || Hashtbl.mem existing_ids renamed)
+            && not (is_same_beads_issue renamed orig))
           (* Resolve an endpoint that names no record in this file. An id the
              tracker already holds resolves to itself. A beads id needing a
              rename resolves ONLY to an issue that proves it descends from that
@@ -1290,16 +1305,13 @@ let import_cmd =
          a valid endpoint, and leaving it in produced a dangling edge on some
          OTHER new issue. *)
       let beads, unreadable_warns =
-        let ok, bad =
-          List.partition
-            (fun (b : Ditz.Import_beads.bead) -> not (Hashtbl.mem unreadable b.id))
-            beads
-        in
+        let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> not (blocked b.id)) beads in
         ( ok,
           List.map
             (fun (b : Ditz.Import_beads.bead) ->
               Printf.sprintf
-                "%s: an issue file for this id exists but could not be read; refusing to overwrite it"
+                "%s: an issue file for this id exists but does not hold a readable issue with that \
+                 id; refusing to overwrite it"
                 b.id)
             bad )
       in

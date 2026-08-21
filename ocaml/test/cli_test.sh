@@ -264,6 +264,22 @@ fi
 # import: "absent" and "unreadable" are different answers, and only one of them
 # makes creating safe. A directory at the path is used rather than chmod so the
 # test still fails the read when run as root.
+# Occupancy is decided by FILENAME, not by the id inside the file: an import of
+# "fm-a" targets issue-fm-a.yaml whatever that file turns out to contain, so a
+# file whose contents name a different issue must not be written over.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"fm-b","title":"THE REAL FM-B","status":"open"}
+JSONL
+mv .ditz/issue-fm-b.yaml .ditz/issue-fm-a.yaml
+imp_out="$(printf '%s\n' '{"id":"fm-a","title":"intruder","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "filename/id mismatch exits non-zero" 1 "$rc"
+contains "filename/id mismatch is refused" "refusing to overwrite it" "$imp_out"
+case "$(cat .ditz/issue-fm-a.yaml)" in
+  *"THE REAL FM-B"*) echo "ok: mismatched file left intact";;
+  *) echo "FAIL: import clobbered a file whose id did not match its name"; fail=1;;
+esac
+rm -f .ditz/issue-fm-a.yaml
+
 mkdir -p .ditz/issue-ur-1.yaml
 # Imported alongside another issue that depends on it: a refused issue is not an
 # id that will exist, so the dependent must NOT keep an edge to it. Leaving it

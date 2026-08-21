@@ -109,22 +109,43 @@ module FS = struct
      SAME pass -- two scans can disagree if readability changes between them,
      and "in neither list" is precisely the state that lets a write clobber
      data it could not read. *)
-  let load_issues_classified dir =
-    issue_files dir
-    |> List.fold_left
-         (fun (ok, bad) path ->
-           match load_issue path with
-           | Ok issue -> (issue :: ok, bad)
-           | Error (`Msg e) ->
-             Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-             ( ok,
-               match id_of_issue_filename (Filename.basename path) with
-               | Some id -> id :: bad
-               | None -> bad ))
-         ([], [])
-    |> fun (ok, bad) -> (List.rev ok, List.rev bad)
+  (* One scan: the issues that loaded, and every id whose FILE is present --
+     readable or not, and regardless of what id the file turns out to contain.
+     Occupancy has to come from the filename because that is what a write
+     targets: issue-foo.yaml holding "id: bar" is still the file an import of
+     "foo" would land on.
 
-  let load_issues dir = fst (load_issues_classified dir)
+     Error means the store could not be ENUMERATED, which is not the same as
+     finding it empty. Anything using this for overwrite protection must fail
+     closed on Error, or "could not look" reads as "nothing is there" and every
+     write looks safe. *)
+  let load_issues_classified dir =
+    match issue_files dir with
+    | exception Sys_error e ->
+      Error (`Msg (Printf.sprintf "Failed to list %s: %s" dir e))
+    | files ->
+      files
+      |> List.fold_left
+           (fun (ok, occupied) path ->
+             let occupied =
+               match id_of_issue_filename (Filename.basename path) with
+               | Some id -> id :: occupied
+               | None -> occupied
+             in
+             match load_issue path with
+             | Ok issue -> (issue :: ok, occupied)
+             | Error (`Msg e) ->
+               Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+               (ok, occupied))
+           ([], [])
+      |> fun (ok, occupied) -> Ok (List.rev ok, List.rev occupied)
+
+  let load_issues dir =
+    match load_issues_classified dir with
+    | Ok (issues, _) -> issues
+    | Error (`Msg e) ->
+      Logs.warn (fun m -> m "Failed to list issues: %s" e);
+      []
 
   let delete_issue dir id =
     match validate_id id with
@@ -195,24 +216,37 @@ module GitBackend = struct
       Git.write_to_branch ~path ~content ~commit_msg
 
   let load_issues_classified () =
-    Git.list_ditz_files ()
-    |> List.filter (fun f ->
-        let basename = Filename.basename f in
-        String.length basename > 6 &&
-        String.sub basename 0 6 = "issue-" &&
-        Filename.check_suffix basename ".yaml")
-    |> List.fold_left
-         (fun (ok, bad) path ->
-           let filename = Filename.basename path in
-           match load_issue filename with
-           | Ok issue -> (issue :: ok, bad)
-           | Error (`Msg e) ->
-             Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-             (ok, match id_of_issue_filename filename with Some id -> id :: bad | None -> bad))
-         ([], [])
-    |> fun (ok, bad) -> (List.rev ok, List.rev bad)
+    match Git.list_ditz_files_result () with
+    | Error (`Msg e) -> Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
+    | Ok files ->
+      files
+      |> List.filter (fun f ->
+          let basename = Filename.basename f in
+          String.length basename > 6 &&
+          String.sub basename 0 6 = "issue-" &&
+          Filename.check_suffix basename ".yaml")
+      |> List.fold_left
+           (fun (ok, occupied) path ->
+             let filename = Filename.basename path in
+             let occupied =
+               match id_of_issue_filename filename with
+               | Some id -> id :: occupied
+               | None -> occupied
+             in
+             match load_issue filename with
+             | Ok issue -> (issue :: ok, occupied)
+             | Error (`Msg e) ->
+               Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+               (ok, occupied))
+           ([], [])
+      |> fun (ok, occupied) -> Ok (List.rev ok, List.rev occupied)
 
-  let load_issues () = fst (load_issues_classified ())
+  let load_issues () =
+    match load_issues_classified () with
+    | Ok (issues, _) -> issues
+    | Error (`Msg e) ->
+      Logs.warn (fun m -> m "Failed to list issues: %s" e);
+      []
 
   let delete_issue id ~commit_msg =
     match validate_id id with
