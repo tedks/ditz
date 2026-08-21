@@ -1234,6 +1234,13 @@ let import_cmd =
       let existing = Ditz.Storage.load_issues config.issue_dir in
       let existing_ids = Hashtbl.create (List.length existing) in
       List.iter (fun (i : Ditz.Types.issue) -> Hashtbl.replace existing_ids i.id i) existing;
+      (* Issues whose file is there but unreadable. load_issues drops them with
+         a log warning, so without this they look absent -- and the create path
+         would overwrite data it could not even read. *)
+      let unreadable = Hashtbl.create 4 in
+      List.iter
+        (fun id -> Hashtbl.replace unreadable id ())
+        (Ditz.Storage.unreadable_ids config.issue_dir);
       (* Does the issue already stored under [id] descend from beads issue
          [beads_id]? Re-importing the same renamed issue must stay the benign
          idempotent skip; only an UNRELATED occupant is a collision. Identity is
@@ -1313,6 +1320,14 @@ let import_cmd =
             (* Idempotent: an existing issue keeps its fields. Its edges still
                have to be completed, or the sides disagree. *)
             skipped := b.id :: !skipped
+          | Error _ when Hashtbl.mem unreadable b.id ->
+            (* Absent and unreadable are different answers. Creating over the
+               second destroys an issue we never managed to read. *)
+            warnings :=
+              Printf.sprintf
+                "%s: an issue file for this id exists but could not be read; refusing to overwrite it"
+                b.id
+              :: !warnings
           | Error _ ->
             let blocks = Option.value (Hashtbl.find_opt reciprocal b.id) ~default:[] in
             let blocked_by_extra = Option.value (Hashtbl.find_opt children b.id) ~default:[] in

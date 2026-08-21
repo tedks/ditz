@@ -50,8 +50,18 @@ let to_yaml_string to_yaml value =
   Yaml.to_string_exn yaml
 
 (* Filesystem backend operations *)
+(* "issue-<id>.yaml" -> "<id>". An unreadable file still names its issue, which
+   is what lets a caller refuse to overwrite data it could not read. *)
+let id_of_issue_filename base =
+  let prefix = "issue-" and suffix = ".yaml" in
+  let pl = String.length prefix and sl = String.length suffix and bl = String.length base in
+  if bl > pl + sl && String.sub base 0 pl = prefix && Filename.check_suffix base suffix then
+    Some (String.sub base pl (bl - pl - sl))
+  else None
+
 module FS = struct
   let project_file dir = Filename.concat dir "project.yaml"
+
 
   let issue_files dir =
     Sys.readdir dir
@@ -102,6 +112,17 @@ module FS = struct
         | Error (`Msg e) ->
           Logs.warn (fun m -> m "Failed to load %s: %s" path e);
           None)
+
+  (* Ids whose file is present but unreadable. Distinguishing these from
+     genuinely absent ids is what stops a write path from clobbering data it
+     could not parse: since read_yaml_file returns Error rather than raising,
+     "cannot read" would otherwise look exactly like "not there". *)
+  let unreadable_ids dir =
+    issue_files dir
+    |> List.filter_map (fun path ->
+        match load_issue path with
+        | Ok _ -> None
+        | Error _ -> id_of_issue_filename (Filename.basename path))
 
   let delete_issue dir id =
     match validate_id id with
@@ -187,6 +208,14 @@ module GitBackend = struct
           Logs.warn (fun m -> m "Failed to load %s: %s" path e);
           None)
 
+  let unreadable_ids () =
+    Git.list_ditz_files ()
+    |> List.filter_map (fun path ->
+        let base = Filename.basename path in
+        match id_of_issue_filename base with
+        | None -> None
+        | Some id -> ( match load_issue base with Ok _ -> None | Error _ -> Some id))
+
   let delete_issue id ~commit_msg =
     match validate_id id with
     | Error _ as e -> e
@@ -263,6 +292,11 @@ let load_issues dir =
   match detect_backend () with
   | GitBranch -> GitBackend.load_issues ()
   | Filesystem d -> FS.load_issues (if dir = default_issue_dir then d else dir)
+
+let unreadable_ids dir =
+  match detect_backend () with
+  | GitBranch -> GitBackend.unreadable_ids ()
+  | Filesystem d -> FS.unreadable_ids (if dir = default_issue_dir then d else dir)
 
 let save_issue ?(commit_msg = "ditz: update issue") dir issue =
   match detect_backend () with

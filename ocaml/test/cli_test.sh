@@ -228,26 +228,48 @@ case "$("$BIN" deps --check 2>&1 | grep -E 'ep-1|ep-kid')" in
 esac
 
 # A save that fails must not leave an existing issue pointing at the issue that
-# was never written. Forced by pre-creating the target path as a DIRECTORY, so
-# this one write fails while every other write still succeeds -- a read-only
-# .ditz would fail the patch too and prove nothing.
-"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+# was never written. This needs a WRITE to fail while reads still work, so the
+# issue dir is made unwritable -- a directory at the target path would instead
+# be caught by the unreadable-issue guard below, never reaching the save. The
+# discriminator is that no edge completion is even attempted: if the patch were
+# queued before the save, it would be tried and reported here too.
+if [ "$(id -u)" != "0" ]; then
+  "$BIN" import - >/dev/null 2>&1 <<'JSONL'
 {"id":"sf-existing","title":"incumbent","status":"open"}
 JSONL
-mkdir -p .ditz/issue-sf-new.yaml
-imp_out="$(printf '%s\n' \
-  '{"id":"sf-new","title":"cannot be written","status":"open","dependencies":[{"issue_id":"sf-new","depends_on_id":"sf-existing","type":"blocks"}]}' \
-  | "$BIN" import - 2>&1)"; rc=$?
-check "failed save exits non-zero" 1 "$rc"
-contains "failed save is reported" "failed to save sf-new" "$imp_out"
-# Direction-agnostic on purpose: the reciprocal of "sf-existing blocks sf-new"
-# lands in sf-existing's `blocks`, which is easy to misread as `blocked_by`.
-# Asserting the id appears NOWHERE cannot be satisfied vacuously either way.
-case "$("$BIN" show sf-existing --json)" in
-  *sf-new*) echo "FAIL: existing issue points at the issue that was never written"; fail=1;;
-  *) echo "ok: existing issue not pointed at the unwritten issue";;
-esac
-rmdir .ditz/issue-sf-new.yaml
+  chmod a-w .ditz
+  imp_out="$(printf '%s\n' \
+    '{"id":"sf-new","title":"cannot be written","status":"open","dependencies":[{"issue_id":"sf-new","depends_on_id":"sf-existing","type":"blocks"}]}' \
+    | "$BIN" import - 2>&1)"; rc=$?
+  chmod u+w .ditz
+  check "failed save exits non-zero" 1 "$rc"
+  contains "failed save is reported" "failed to save sf-new" "$imp_out"
+  case "$imp_out" in
+    *"failed to complete edges"*) echo "FAIL: edge completion was queued for a save that failed"; fail=1;;
+    *) echo "ok: no edge completion queued for a failed save";;
+  esac
+  # ...and nothing about the unwritten issue reached the existing one. Checked
+  # by id rather than by field name: the reciprocal of "sf-existing blocks
+  # sf-new" lands in sf-existing's `blocks`, which is easy to misread.
+  case "$("$BIN" show sf-existing --json)" in
+    *sf-new*) echo "FAIL: existing issue points at the issue that was never written"; fail=1;;
+    *) echo "ok: existing issue not pointed at the unwritten issue";;
+  esac
+else
+  echo "ok: save-failure test skipped (running as root; permission bits do not apply)"
+fi
+
+# An issue whose file exists but cannot be read must not be overwritten by an
+# import: "absent" and "unreadable" are different answers, and only one of them
+# makes creating safe. A directory at the path is used rather than chmod so the
+# test still fails the read when run as root.
+mkdir -p .ditz/issue-ur-1.yaml
+imp_out="$(printf '%s\n' '{"id":"ur-1","title":"replacement","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "unreadable existing issue exits non-zero" 1 "$rc"
+contains "unreadable existing issue is refused" "refusing to overwrite it" "$imp_out"
+[ -d .ditz/issue-ur-1.yaml ] || { echo "FAIL: import clobbered the unreadable issue"; fail=1; }
+[ -d .ditz/issue-ur-1.yaml ] && echo "ok: unreadable issue left intact"
+rmdir .ditz/issue-ur-1.yaml
 
 # An issue cannot block itself: beads allows the record, `deps --check` calls
 # it a CYCLE, so the importer must not write it.
