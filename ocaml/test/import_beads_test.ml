@@ -203,7 +203,16 @@ not json at all
   let kept_titles = List.map (fun (b : Import_beads.bead) -> b.Import_beads.title) okept2 in
   assert (kept_titles = [ "the real owner" ]);
   assert (List.length owarns2 = 1);
-  print_endline "PASS: taken is per-bead, so the real owner keeps its id regardless of file order";
+  (* ...and the claim of order independence is only pinned if both orders run *)
+  let order_text_rev = {|{"id":"a.b","title":"the real owner","status":"open"}
+{"id":"a:b","title":"unrelated","status":"open"}|} in
+  let ordb2, _ = Import_beads.parse_jsonl order_text_rev in
+  let okept3, _, owarns3 =
+    Import_beads.sanitize_ids ~taken:(fun ~orig ~renamed -> renamed = "a-b" && orig <> "a.b") ordb2
+  in
+  assert (List.map (fun (b : Import_beads.bead) -> b.Import_beads.title) okept3 = [ "the real owner" ]);
+  assert (List.length owarns3 = 1);
+  print_endline "PASS: taken is per-bead, so the real owner keeps its id in either file order";
 
   (* An endpoint naming no record in this file is only rewritten when
      [resolve_external] vouches for it. Left to a blind sanitize, an edge to

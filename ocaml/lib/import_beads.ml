@@ -330,6 +330,18 @@ let sanitize_ids ?(taken = fun ~orig:_ ~renamed:_ -> false)
 let sanitize_edges ~known (beads : bead list) : bead list * string list =
   List.fold_left
     (fun (acc, warns) b ->
+      (* An issue cannot block or parent itself. beads permits the record;
+         ditz's own `deps --check` calls it a CYCLE, so importing it would again
+         mean manufacturing a graph the tool rejects. *)
+      let self_blockers, blockers = List.partition (fun d -> d = b.id) b.blockers in
+      let self_parents, parents = List.partition (fun d -> d = b.id) b.parents in
+      let b = { b with blockers; parents } in
+      let warns =
+        List.fold_left
+          (fun w _ -> Printf.sprintf "%s: dropped self-referential edge" b.id :: w)
+          warns
+          (self_blockers @ self_parents)
+      in
       let good, bad = List.partition known b.blockers in
       let good_parents, bad_parents = List.partition known b.parents in
       let warns =

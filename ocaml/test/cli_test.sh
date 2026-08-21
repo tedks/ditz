@@ -227,6 +227,32 @@ case "$("$BIN" deps --check 2>&1 | grep -E 'ep-1|ep-kid')" in
   *) echo "ok: imported edge is valid on both sides";;
 esac
 
+# A save that fails must not leave an existing issue pointing at the issue that
+# was never written. Forced by pre-creating the target path as a DIRECTORY, so
+# this one write fails while every other write still succeeds -- a read-only
+# .ditz would fail the patch too and prove nothing.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"sf-existing","title":"incumbent","status":"open"}
+JSONL
+mkdir -p .ditz/issue-sf-new.yaml
+imp_out="$(printf '%s\n' \
+  '{"id":"sf-new","title":"cannot be written","status":"open","dependencies":[{"issue_id":"sf-new","depends_on_id":"sf-existing","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "failed save exits non-zero" 1 "$rc"
+contains "failed save is reported" "failed to save sf-new" "$imp_out"
+contains "existing issue not pointed at the unwritten issue" '"blocks":[]' "$("$BIN" show sf-existing --json)"
+rmdir .ditz/issue-sf-new.yaml
+
+# An issue cannot block itself: beads allows the record, `deps --check` calls
+# it a CYCLE, so the importer must not write it.
+imp_out="$(printf '%s\n' \
+  '{"id":"self-1","title":"t","status":"open","dependencies":[{"issue_id":"self-1","depends_on_id":"self-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "self-referential edge exits non-zero" 1 "$rc"
+contains "self-referential edge warned" "dropped self-referential edge" "$imp_out"
+contains "self-referential edge not stored" '"blocked_by":[]' "$("$BIN" show self-1 --json)"
+case "$("$BIN" deps --check 2>&1 | grep 'self-1')" in *CYCLE*) echo "FAIL: import created a self-cycle"; fail=1;; *) echo "ok: no self-cycle created";; esac
+
 # An edge naming an id that is NOT in this file must not attach itself to an
 # unrelated issue that merely occupies the sanitized form of that id.
 "$BIN" import - >/dev/null 2>&1 <<'JSONL'

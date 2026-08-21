@@ -62,9 +62,17 @@ module FS = struct
         Filename.check_suffix f ".yaml")
     |> List.map (Filename.concat dir)
 
+  (* Fs_util.read_file raises on anything it cannot read -- a directory sitting
+     where an issue file belongs, a permission problem, a truncated read. That
+     escaped as "ditz: internal error, uncaught exception" and took down every
+     command that scans the issue dir, including the error paths meant to
+     report it. Unreadable is a Result like any other failure. *)
   let read_yaml_file of_yaml path =
-    let content = Fs_util.read_file path in
-    parse_yaml of_yaml content path
+    match Fs_util.read_file path with
+    | content -> parse_yaml of_yaml content path
+    | exception Sys_error e -> Error (`Msg (Printf.sprintf "Failed to read %s: %s" path e))
+    | exception End_of_file ->
+      Error (`Msg (Printf.sprintf "Failed to read %s: unexpected end of file" path))
 
   let write_yaml_file to_yaml path value =
     let content = to_yaml_string to_yaml value in
