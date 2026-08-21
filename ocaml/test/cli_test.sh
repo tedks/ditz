@@ -240,7 +240,13 @@ imp_out="$(printf '%s\n' \
   | "$BIN" import - 2>&1)"; rc=$?
 check "failed save exits non-zero" 1 "$rc"
 contains "failed save is reported" "failed to save sf-new" "$imp_out"
-contains "existing issue not pointed at the unwritten issue" '"blocks":[]' "$("$BIN" show sf-existing --json)"
+# Direction-agnostic on purpose: the reciprocal of "sf-existing blocks sf-new"
+# lands in sf-existing's `blocks`, which is easy to misread as `blocked_by`.
+# Asserting the id appears NOWHERE cannot be satisfied vacuously either way.
+case "$("$BIN" show sf-existing --json)" in
+  *sf-new*) echo "FAIL: existing issue points at the issue that was never written"; fail=1;;
+  *) echo "ok: existing issue not pointed at the unwritten issue";;
+esac
 rmdir .ditz/issue-sf-new.yaml
 
 # An issue cannot block itself: beads allows the record, `deps --check` calls
