@@ -1231,16 +1231,15 @@ let import_cmd =
       (* An import is incremental, not a fresh world: the tracker already holds
          issues, and both id collisions and edge endpoints have to be judged
          against them. Load once. *)
-      let existing = Ditz.Storage.load_issues config.issue_dir in
+      (* Both halves come from ONE scan. Asking twice lets the two answers
+         disagree if a file's readability changes in between, and an id missing
+         from both is exactly the state that lets a write clobber data it could
+         not read. *)
+      let existing, unreadable_list = Ditz.Storage.load_issues_classified config.issue_dir in
       let existing_ids = Hashtbl.create (List.length existing) in
       List.iter (fun (i : Ditz.Types.issue) -> Hashtbl.replace existing_ids i.id i) existing;
-      (* Issues whose file is there but unreadable. load_issues drops them with
-         a log warning, so without this they look absent -- and the create path
-         would overwrite data it could not even read. *)
-      let unreadable = Hashtbl.create 4 in
-      List.iter
-        (fun id -> Hashtbl.replace unreadable id ())
-        (Ditz.Storage.unreadable_ids config.issue_dir);
+      let unreadable = Hashtbl.create (List.length unreadable_list) in
+      List.iter (fun id -> Hashtbl.replace unreadable id ()) unreadable_list;
       (* Does the issue already stored under [id] descend from beads issue
          [beads_id]? Re-importing the same renamed issue must stay the benign
          idempotent skip; only an UNRELATED occupant is a collision. Identity is
@@ -1286,6 +1285,24 @@ let import_cmd =
         let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> valid b.id) beads in
         (ok, List.map (fun (b : Ditz.Import_beads.bead) -> Printf.sprintf "skipped invalid issue id '%s'" b.id) bad)
       in
+      (* Refused here, before `importing` is built, so the edge machinery never
+         counts them as ids that will exist: an issue we decline to write is not
+         a valid endpoint, and leaving it in produced a dangling edge on some
+         OTHER new issue. *)
+      let beads, unreadable_warns =
+        let ok, bad =
+          List.partition
+            (fun (b : Ditz.Import_beads.bead) -> not (Hashtbl.mem unreadable b.id))
+            beads
+        in
+        ( ok,
+          List.map
+            (fun (b : Ditz.Import_beads.bead) ->
+              Printf.sprintf
+                "%s: an issue file for this id exists but could not be read; refusing to overwrite it"
+                b.id)
+            bad )
+      in
       (* An edge may only survive if its endpoint will exist afterwards: a
          record in this import, or an issue the tracker already holds. Keeping a
          dangling edge would leave `ditz deps --check` rejecting the graph. *)
@@ -1296,7 +1313,9 @@ let import_cmd =
       let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
       let children = Ditz.Import_beads.children_by_parent beads in
       let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
-      let warnings = ref (parse_warns @ rename_warns @ dup_warns @ id_warns @ edge_warns) in
+      let warnings =
+        ref (parse_warns @ rename_warns @ dup_warns @ id_warns @ unreadable_warns @ edge_warns)
+      in
       let notices = ref rename_notices in
       let created = ref [] and skipped = ref [] in
       (* Reciprocal edges landing on issues we are NOT creating (already
@@ -1315,20 +1334,14 @@ let import_cmd =
       in
       List.iter
         (fun (b : Ditz.Import_beads.bead) ->
-          match Ditz.Storage.find_issue_by_exact_id config.issue_dir b.id with
-          | Ok _ ->
+          (* Answered from the same scan as everything else rather than a fresh
+             read per bead: a third read is a third chance to disagree, and the
+             disagreement that matters here ends in an overwrite. *)
+          if Hashtbl.mem existing_ids b.id then
             (* Idempotent: an existing issue keeps its fields. Its edges still
                have to be completed, or the sides disagree. *)
             skipped := b.id :: !skipped
-          | Error _ when Hashtbl.mem unreadable b.id ->
-            (* Absent and unreadable are different answers. Creating over the
-               second destroys an issue we never managed to read. *)
-            warnings :=
-              Printf.sprintf
-                "%s: an issue file for this id exists but could not be read; refusing to overwrite it"
-                b.id
-              :: !warnings
-          | Error _ ->
+          else begin
             let blocks = Option.value (Hashtbl.find_opt reciprocal b.id) ~default:[] in
             let blocked_by_extra = Option.value (Hashtbl.find_opt children b.id) ~default:[] in
             let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks ~blocked_by_extra b in
@@ -1342,7 +1355,8 @@ let import_cmd =
                   dangling edge this whole change exists to prevent. *)
                List.iter (fun t -> note_existing_edge ~on:t ~blocks:[] ~blocked_by:[ issue.id ]) issue.blocks;
                List.iter (fun t -> note_existing_edge ~on:t ~blocks:[ issue.id ] ~blocked_by:[]) issue.blocked_by
-             | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings))
+             | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings)
+          end)
         beads;
       (* Complete the far side of every edge that points at a pre-existing
          issue. Additive only -- no field of theirs is touched -- so it is a

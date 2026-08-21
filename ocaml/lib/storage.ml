@@ -104,25 +104,27 @@ module FS = struct
       let path = Filename.concat dir (Printf.sprintf "issue-%s.yaml" safe_id) in
       write_yaml_file issue_to_yaml path issue
 
-  let load_issues dir =
+  (* One scan, one read per file: the issues that loaded, and the ids whose file
+     is present but unreadable. A caller needing both must take them from the
+     SAME pass -- two scans can disagree if readability changes between them,
+     and "in neither list" is precisely the state that lets a write clobber
+     data it could not read. *)
+  let load_issues_classified dir =
     issue_files dir
-    |> List.filter_map (fun path ->
-        match load_issue path with
-        | Ok issue -> Some issue
-        | Error (`Msg e) ->
-          Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-          None)
+    |> List.fold_left
+         (fun (ok, bad) path ->
+           match load_issue path with
+           | Ok issue -> (issue :: ok, bad)
+           | Error (`Msg e) ->
+             Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+             ( ok,
+               match id_of_issue_filename (Filename.basename path) with
+               | Some id -> id :: bad
+               | None -> bad ))
+         ([], [])
+    |> fun (ok, bad) -> (List.rev ok, List.rev bad)
 
-  (* Ids whose file is present but unreadable. Distinguishing these from
-     genuinely absent ids is what stops a write path from clobbering data it
-     could not parse: since read_yaml_file returns Error rather than raising,
-     "cannot read" would otherwise look exactly like "not there". *)
-  let unreadable_ids dir =
-    issue_files dir
-    |> List.filter_map (fun path ->
-        match load_issue path with
-        | Ok _ -> None
-        | Error _ -> id_of_issue_filename (Filename.basename path))
+  let load_issues dir = fst (load_issues_classified dir)
 
   let delete_issue dir id =
     match validate_id id with
@@ -192,29 +194,25 @@ module GitBackend = struct
       let path = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
       Git.write_to_branch ~path ~content ~commit_msg
 
-  let load_issues () =
-    let files = Git.list_ditz_files () in
-    files
+  let load_issues_classified () =
+    Git.list_ditz_files ()
     |> List.filter (fun f ->
         let basename = Filename.basename f in
         String.length basename > 6 &&
         String.sub basename 0 6 = "issue-" &&
         Filename.check_suffix basename ".yaml")
-    |> List.filter_map (fun path ->
-        let filename = Filename.basename path in
-        match load_issue filename with
-        | Ok issue -> Some issue
-        | Error (`Msg e) ->
-          Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-          None)
+    |> List.fold_left
+         (fun (ok, bad) path ->
+           let filename = Filename.basename path in
+           match load_issue filename with
+           | Ok issue -> (issue :: ok, bad)
+           | Error (`Msg e) ->
+             Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+             (ok, match id_of_issue_filename filename with Some id -> id :: bad | None -> bad))
+         ([], [])
+    |> fun (ok, bad) -> (List.rev ok, List.rev bad)
 
-  let unreadable_ids () =
-    Git.list_ditz_files ()
-    |> List.filter_map (fun path ->
-        let base = Filename.basename path in
-        match id_of_issue_filename base with
-        | None -> None
-        | Some id -> ( match load_issue base with Ok _ -> None | Error _ -> Some id))
+  let load_issues () = fst (load_issues_classified ())
 
   let delete_issue id ~commit_msg =
     match validate_id id with
@@ -293,10 +291,10 @@ let load_issues dir =
   | GitBranch -> GitBackend.load_issues ()
   | Filesystem d -> FS.load_issues (if dir = default_issue_dir then d else dir)
 
-let unreadable_ids dir =
+let load_issues_classified dir =
   match detect_backend () with
-  | GitBranch -> GitBackend.unreadable_ids ()
-  | Filesystem d -> FS.unreadable_ids (if dir = default_issue_dir then d else dir)
+  | GitBranch -> GitBackend.load_issues_classified ()
+  | Filesystem d -> FS.load_issues_classified (if dir = default_issue_dir then d else dir)
 
 let save_issue ?(commit_msg = "ditz: update issue") dir issue =
   match detect_backend () with

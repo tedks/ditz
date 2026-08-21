@@ -237,11 +237,12 @@ if [ "$(id -u)" != "0" ]; then
   "$BIN" import - >/dev/null 2>&1 <<'JSONL'
 {"id":"sf-existing","title":"incumbent","status":"open"}
 JSONL
+  ditz_mode="$(stat -c '%a' .ditz)"
   chmod a-w .ditz
   imp_out="$(printf '%s\n' \
     '{"id":"sf-new","title":"cannot be written","status":"open","dependencies":[{"issue_id":"sf-new","depends_on_id":"sf-existing","type":"blocks"}]}' \
     | "$BIN" import - 2>&1)"; rc=$?
-  chmod u+w .ditz
+  chmod "$ditz_mode" .ditz
   check "failed save exits non-zero" 1 "$rc"
   contains "failed save is reported" "failed to save sf-new" "$imp_out"
   case "$imp_out" in
@@ -264,11 +265,23 @@ fi
 # makes creating safe. A directory at the path is used rather than chmod so the
 # test still fails the read when run as root.
 mkdir -p .ditz/issue-ur-1.yaml
-imp_out="$(printf '%s\n' '{"id":"ur-1","title":"replacement","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+# Imported alongside another issue that depends on it: a refused issue is not an
+# id that will exist, so the dependent must NOT keep an edge to it. Leaving it
+# in produced a dangling edge on an issue that imported perfectly well.
+imp_out="$(printf '%s\n' \
+  '{"id":"ur-1","title":"replacement","status":"open"}' \
+  '{"id":"ur-dep","title":"depends on the unreadable one","status":"open","dependencies":[{"issue_id":"ur-dep","depends_on_id":"ur-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
 check "unreadable existing issue exits non-zero" 1 "$rc"
 contains "unreadable existing issue is refused" "refusing to overwrite it" "$imp_out"
+contains "edge to a refused issue is dropped" "dropped blocking edge to unknown id 'ur-1'" "$imp_out"
+contains "dependent has no edge to the refused issue" '"blocked_by":[]' "$("$BIN" show ur-dep --json)"
 [ -d .ditz/issue-ur-1.yaml ] || { echo "FAIL: import clobbered the unreadable issue"; fail=1; }
 [ -d .ditz/issue-ur-1.yaml ] && echo "ok: unreadable issue left intact"
+case "$("$BIN" deps --check 2>/dev/null | grep 'ur-')" in
+  *DANGLING*) echo "FAIL: refused issue left a dangling edge"; fail=1;;
+  *) echo "ok: refused issue left no dangling edge";;
+esac
 rmdir .ditz/issue-ur-1.yaml
 
 # An issue cannot block itself: beads allows the record, `deps --check` calls
