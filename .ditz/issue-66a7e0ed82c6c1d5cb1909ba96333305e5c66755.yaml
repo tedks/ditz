@@ -1,0 +1,30 @@
+id: 66a7e0ed82c6c1d5cb1909ba96333305e5c66755
+title: import accepts multi-issue cycles that deps --check rejects
+desc: 'The beads importer drops self-referential edges, but still accepts a cycle
+  spanning two or more issues (a blocks b, b blocks a) from source data. `ditz deps
+  --check` then reports CYCLE, so the importer can still produce a graph the tool
+  considers invalid -- the same shape as the dangling and one-sided bugs fixed in
+  the import-fidelity branch (PR #24), which is why it is worth closing.
+
+
+  Note `ditz blocks` already has L1 cycle prevention; import bypasses it entirely.
+
+
+  The design call, which is why it was not fixed inside a convergence round: refuse
+  the cyclic edges at import (and warn + exit non-zero, consistent with the rest of
+  the contract), or accept them and report. Refusing needs a rule for WHICH edge in
+  the cycle to drop, which is not obvious and may deserve operator input rather than
+  a heuristic.'
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-21T00:04:16-00:00
+references: []
+log_events:
+- time: 2026-08-21T00:04:16-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
