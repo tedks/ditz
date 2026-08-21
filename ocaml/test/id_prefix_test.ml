@@ -70,4 +70,19 @@ let () =
       | Ok v -> v
       | Error (`Msg e) -> failwith e
     in
-    assert (issue.Types.id = "abc999"))
+    assert (issue.Types.id = "abc999");
+
+    (* An exact id is never ambiguous, even when it prefixes its siblings. The
+       beads import renames "goals-53u.1" to "goals-53u-1", which makes the
+       epic's own id a strict prefix of every child's; without exact-match
+       precedence the epic cannot be shown, closed, or dropped at all. *)
+    save_issue dir (base_issue "epic-1");
+    save_issue dir (base_issue "epic-1-a");
+    save_issue dir (base_issue "epic-1-b");
+    (match Storage.find_issue_by_id dir "epic-1" with
+     | Ok v -> assert (v.Types.id = "epic-1")
+     | Error (`Msg e) -> failwith ("exact id should win over prefixes: " ^ e));
+    (* a genuine prefix that matches several and is not itself an id still errors *)
+    (match Storage.find_issue_by_id dir "epic-1-" with
+     | Ok _ -> failwith "expected ambiguous error for non-exact prefix"
+     | Error _ -> ()))

@@ -355,16 +355,24 @@ let read_file_from_branch path =
     --full-tree is load-bearing: ls-tree implicitly limits output to the
     cwd-derived prefix, so without it this silently returns [] (exit 0)
     when run from any subdirectory of a worktree. *)
-let list_ditz_files () =
+let list_ditz_files_result () =
   ensure_local_branch ();
   match git ["ls-tree"; "--full-tree"; "--name-only"; ditz_branch ^ ":.ditz"] with
   | Ok output ->
-    if output = "" then []
-    else
-      String.split_on_char '\n' output
-      |> List.filter (fun l -> String.trim l <> "")
-      |> List.map (fun name -> ".ditz/" ^ String.trim name)
-  | Error _ -> []
+    Ok
+      (if output = "" then []
+       else
+         String.split_on_char '\n' output
+         |> List.filter (fun l -> String.trim l <> "")
+         |> List.map (fun name -> ".ditz/" ^ String.trim name))
+  | Error _ as e -> e
+
+(** Flattens a failed listing to []. Fine for read-only callers, but NOT for
+    anything deciding whether a write would clobber something: "found nothing"
+    and "could not look" become the same answer, and one of them makes every
+    write appear safe. Those callers want [list_ditz_files_result]. *)
+let list_ditz_files () =
+  match list_ditz_files_result () with Ok files -> files | Error _ -> []
 
 (** Write content to a file on ditz-metadata branch using worktree.
     The write is atomic (temp + rename) and does not follow a symlink planted

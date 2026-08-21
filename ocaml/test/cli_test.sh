@@ -154,18 +154,201 @@ out="$(printf '%s\n' '{"id":"imp-1","title":"imported open","status":"open"}' | 
 contains "re-import is idempotent" "1 already present" "$out"
 # unknown format rejected
 out="$(echo '{}' | "$BIN" import - --format jira 2>&1)"; check "import unknown format rejected" 1 "$?"
-# council-convergence regression: an invalid-id bead that blocks a valid issue
-# must NOT leak its id into the valid issue's blocks (the invalid bead is
-# skipped, so the reciprocal edge must be dropped too).
+# An id ditz can't store is RENAMED, not dropped: the issue survives and the
+# reciprocal edge is rewritten to the new id. Renaming is lossless, so it is a
+# note and the exit status stays 0.
 imp_out="$(printf '%s\n' \
   '{"id":"okv","title":"valid one","status":"open"}' \
   '{"id":"bad.v","title":"invalid id","status":"open","dependencies":[{"issue_id":"bad.v","depends_on_id":"okv","type":"blocks"}]}' \
-  | "$BIN" import - 2>&1)"
-contains "invalid-id bead warned" "invalid issue id 'bad.v'" "$imp_out"
-contains "valid issue has no leaked invalid blocks" '"blocks":[]' "$("$BIN" show okv --json)"
-# the skipped invalid id must not appear in the graph at all (tracker has other
-# fixtures, so check the leak specifically, not global cleanliness)
+  | "$BIN" import - 2>&1)"; rc=$?
+check "lossless rename import exits 0" 0 "$rc"
+contains "invalid id renamed, not skipped" "renamed id 'bad.v' -> 'bad-v'" "$imp_out"
+contains "renamed bead is present" '"title":"invalid id"' "$("$BIN" show bad-v --json)"
+contains "original beads id kept in provenance" "beads_id=bad.v" "$("$BIN" show bad-v)"
+contains "reciprocal edge follows the rename" '"blocks":["bad-v"]' "$("$BIN" show okv --json)"
+# council-convergence regression: the pre-rename id must not survive anywhere in
+# the graph (tracker has other fixtures, so check this leak specifically).
 case "$("$BIN" deps --check 2>&1)" in *bad.v*) echo "FAIL: bad.v leaked into graph"; fail=1;; *) echo "ok: no bad.v leak in deps --check";; esac
+
+# An id that renaming cannot rescue is still dropped -- and that is data loss,
+# so it must warn AND exit non-zero. Its reciprocal edge must not leak either.
+imp_out="$(printf '%s\n' \
+  '{"id":"okw","title":"valid two","status":"open"}' \
+  '{"id":"","title":"empty id","status":"open","dependencies":[{"issue_id":"","depends_on_id":"okw","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "lossy import exits non-zero" 1 "$rc"
+contains "lossy import says so" "Import INCOMPLETE" "$imp_out"
+contains "unstorable id still dropped" "skipped invalid issue id" "$imp_out"
+contains "dropped bead leaks no reciprocal edge" '"blocks":[]' "$("$BIN" show okw --json)"
+
+# An edge to an id that will not exist after the import is dropped and warned:
+# keeping it would leave `deps --check` calling the whole graph DANGLING.
+imp_out="$(printf '%s\n' \
+  '{"id":"dang-1","title":"real","status":"open","dependencies":[{"issue_id":"dang-1","depends_on_id":"ghost-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "dangling endpoint exits non-zero" 1 "$rc"
+contains "dangling endpoint warned" "dropped blocking edge to unknown id 'ghost-1'" "$imp_out"
+contains "dangling endpoint not stored" '"blocked_by":[]' "$("$BIN" show dang-1 --json)"
+
+# A rename onto an id an UNRELATED issue already holds must not swallow the
+# incoming issue; re-importing the same issue must stay a benign skip.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"occ-1","title":"the incumbent","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' '{"id":"occ.1","title":"different issue","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "destination collision exits non-zero" 1 "$rc"
+contains "destination collision warned" "an unrelated issue already holds that id" "$imp_out"
+contains "incumbent untouched" '"title":"the incumbent"' "$("$BIN" show occ-1 --json)"
+# ...whereas re-importing the same renamed issue is idempotent, not a collision
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"same.1","title":"mine","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' '{"id":"same.1","title":"mine","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "same-issue re-import exits 0" 0 "$rc"
+contains "same-issue re-import is a skip" "1 already present" "$imp_out"
+
+# An edge whose far side is an already-present issue must be written on BOTH
+# sides, or `deps --check` reports ONE-SIDED.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"ep-1","title":"epic","status":"open"}
+JSONL
+imp_out="$("$BIN" import - 2>&1 <<'JSONL'
+{"id":"ep-1","title":"epic","status":"open"}
+{"id":"ep-kid","title":"child","status":"open","dependencies":[{"issue_id":"ep-kid","depends_on_id":"ep-1","type":"parent-child"}]}
+JSONL
+)"; rc=$?
+check "completing an existing issue's edge exits 0" 0 "$rc"
+contains "far side completed" '"blocked_by":["ep-kid"]' "$("$BIN" show ep-1 --json)"
+# Scoped to this pair on purpose: the tracker also holds fixtures that are
+# deliberately cyclic/dangling to exercise `deps --check` itself, so global
+# cleanliness is not the assertion available here.
+case "$("$BIN" deps --check 2>&1 | grep -E 'ep-1|ep-kid')" in
+  *ONE-SIDED*|*DANGLING*) echo "FAIL: import left ep-1/ep-kid in an invalid state"; fail=1;;
+  *) echo "ok: imported edge is valid on both sides";;
+esac
+
+# A save that fails must not leave an existing issue pointing at the issue that
+# was never written. This needs a WRITE to fail while reads still work, so the
+# issue dir is made unwritable -- a directory at the target path would instead
+# be caught by the unreadable-issue guard below, never reaching the save. The
+# discriminator is that no edge completion is even attempted: if the patch were
+# queued before the save, it would be tried and reported here too.
+if [ "$(id -u)" != "0" ]; then
+  "$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"sf-existing","title":"incumbent","status":"open"}
+JSONL
+  ditz_mode="$(stat -c '%a' .ditz)"
+  chmod a-w .ditz
+  imp_out="$(printf '%s\n' \
+    '{"id":"sf-new","title":"cannot be written","status":"open","dependencies":[{"issue_id":"sf-new","depends_on_id":"sf-existing","type":"blocks"}]}' \
+    | "$BIN" import - 2>&1)"; rc=$?
+  chmod "$ditz_mode" .ditz
+  check "failed save exits non-zero" 1 "$rc"
+  contains "failed save is reported" "failed to save sf-new" "$imp_out"
+  case "$imp_out" in
+    *"failed to complete edges"*) echo "FAIL: edge completion was queued for a save that failed"; fail=1;;
+    *) echo "ok: no edge completion queued for a failed save";;
+  esac
+  # ...and nothing about the unwritten issue reached the existing one. Checked
+  # by id rather than by field name: the reciprocal of "sf-existing blocks
+  # sf-new" lands in sf-existing's `blocks`, which is easy to misread.
+  case "$("$BIN" show sf-existing --json)" in
+    *sf-new*) echo "FAIL: existing issue points at the issue that was never written"; fail=1;;
+    *) echo "ok: existing issue not pointed at the unwritten issue";;
+  esac
+else
+  echo "ok: save-failure test skipped (running as root; permission bits do not apply)"
+fi
+
+# An issue whose file exists but cannot be read must not be overwritten by an
+# import: "absent" and "unreadable" are different answers, and only one of them
+# makes creating safe. A directory at the path is used rather than chmod so the
+# test still fails the read when run as root.
+# Occupancy is decided by FILENAME, not by the id inside the file: an import of
+# "fm-a" targets issue-fm-a.yaml whatever that file turns out to contain, so a
+# file whose contents name a different issue must not be written over.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"fm-b","title":"THE REAL FM-B","status":"open"}
+JSONL
+mv .ditz/issue-fm-b.yaml .ditz/issue-fm-a.yaml
+imp_out="$(printf '%s\n' '{"id":"fm-a","title":"intruder","status":"open"}' | "$BIN" import - 2>&1)"; rc=$?
+check "filename/id mismatch exits non-zero" 1 "$rc"
+contains "filename/id mismatch is refused" "refusing to overwrite it" "$imp_out"
+case "$(cat .ditz/issue-fm-a.yaml)" in
+  *"THE REAL FM-B"*) echo "ok: mismatched file left intact";;
+  *) echo "FAIL: import clobbered a file whose id did not match its name"; fail=1;;
+esac
+rm -f .ditz/issue-fm-a.yaml
+
+mkdir -p .ditz/issue-ur-1.yaml
+# Imported alongside another issue that depends on it: a refused issue is not an
+# id that will exist, so the dependent must NOT keep an edge to it. Leaving it
+# in produced a dangling edge on an issue that imported perfectly well.
+imp_out="$(printf '%s\n' \
+  '{"id":"ur-1","title":"replacement","status":"open"}' \
+  '{"id":"ur-dep","title":"depends on the unreadable one","status":"open","dependencies":[{"issue_id":"ur-dep","depends_on_id":"ur-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "unreadable existing issue exits non-zero" 1 "$rc"
+contains "unreadable existing issue is refused" "refusing to overwrite it" "$imp_out"
+contains "edge to a refused issue is dropped" "dropped blocking edge to unknown id 'ur-1'" "$imp_out"
+contains "dependent has no edge to the refused issue" '"blocked_by":[]' "$("$BIN" show ur-dep --json)"
+[ -d .ditz/issue-ur-1.yaml ] || { echo "FAIL: import clobbered the unreadable issue"; fail=1; }
+[ -d .ditz/issue-ur-1.yaml ] && echo "ok: unreadable issue left intact"
+case "$("$BIN" deps --check 2>/dev/null | grep 'ur-')" in
+  *DANGLING*) echo "FAIL: refused issue left a dangling edge"; fail=1;;
+  *) echo "ok: refused issue left no dangling edge";;
+esac
+rmdir .ditz/issue-ur-1.yaml
+
+# An issue cannot block itself: beads allows the record, `deps --check` calls
+# it a CYCLE, so the importer must not write it.
+imp_out="$(printf '%s\n' \
+  '{"id":"self-1","title":"t","status":"open","dependencies":[{"issue_id":"self-1","depends_on_id":"self-1","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "self-referential edge exits non-zero" 1 "$rc"
+contains "self-referential edge warned" "dropped self-referential edge" "$imp_out"
+contains "self-referential edge not stored" '"blocked_by":[]' "$("$BIN" show self-1 --json)"
+case "$("$BIN" deps --check 2>&1 | grep 'self-1')" in *CYCLE*) echo "FAIL: import created a self-cycle"; fail=1;; *) echo "ok: no self-cycle created";; esac
+
+# An edge naming an id that is NOT in this file must not attach itself to an
+# unrelated issue that merely occupies the sanitized form of that id.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"alias-y","title":"unrelated incumbent","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' \
+  '{"id":"alias-n","title":"new","status":"open","dependencies":[{"issue_id":"alias-n","depends_on_id":"alias.y","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "aliasing endpoint exits non-zero" 1 "$rc"
+contains "aliasing endpoint dropped" "dropped blocking edge to unknown id 'alias.y'" "$imp_out"
+contains "unrelated incumbent not wired up" '"blocks":[]' "$("$BIN" show alias-y --json)"
+# ...but an endpoint DOES resolve when the occupant proves it came from that
+# beads id, which is the incremental-import case that must keep working.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"prov.y","title":"imported earlier","status":"open"}
+JSONL
+imp_out="$(printf '%s\n' \
+  '{"id":"prov-n","title":"new","status":"open","dependencies":[{"issue_id":"prov-n","depends_on_id":"prov.y","type":"blocks"}]}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "vouched endpoint exits 0" 0 "$rc"
+contains "vouched endpoint connects" '"blocked_by":["prov-y"]' "$("$BIN" show prov-n --json)"
+
+# A field that is present but of the wrong type is data we were handed and
+# dropped, so it warns; an absent field does not.
+imp_out="$(printf '%s\n' \
+  '{"id":"wt-1","title":"t","status":"open","acceptance_criteria":42}' \
+  | "$BIN" import - 2>&1)"; rc=$?
+check "wrong-typed field exits non-zero" 1 "$rc"
+contains "wrong-typed field warned" "acceptance_criteria" "$imp_out"
+
+# beads parent-child becomes a real blocking edge: child blocks parent, so the
+# epic is not ready until its children close.
+"$BIN" import - >/dev/null 2>&1 <<'JSONL'
+{"id":"epic-p","title":"epic","status":"open"}
+{"id":"kid-a","title":"child a","status":"open","acceptance_criteria":"the bar is met","dependencies":[{"issue_id":"kid-a","depends_on_id":"epic-p","type":"parent-child"}]}
+JSONL
+contains "child blocks its parent" '"blocks":["epic-p"]' "$("$BIN" show kid-a --json)"
+contains "parent is blocked by its child" '"blocked_by":["kid-a"]' "$("$BIN" show epic-p --json)"
+contains "acceptance_criteria folded into desc" "Acceptance: the bar is met" "$("$BIN" show kid-a)"
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

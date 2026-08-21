@@ -50,8 +50,18 @@ let to_yaml_string to_yaml value =
   Yaml.to_string_exn yaml
 
 (* Filesystem backend operations *)
+(* "issue-<id>.yaml" -> "<id>". An unreadable file still names its issue, which
+   is what lets a caller refuse to overwrite data it could not read. *)
+let id_of_issue_filename base =
+  let prefix = "issue-" and suffix = ".yaml" in
+  let pl = String.length prefix and sl = String.length suffix and bl = String.length base in
+  if bl > pl + sl && String.sub base 0 pl = prefix && Filename.check_suffix base suffix then
+    Some (String.sub base pl (bl - pl - sl))
+  else None
+
 module FS = struct
   let project_file dir = Filename.concat dir "project.yaml"
+
 
   let issue_files dir =
     Sys.readdir dir
@@ -62,9 +72,17 @@ module FS = struct
         Filename.check_suffix f ".yaml")
     |> List.map (Filename.concat dir)
 
+  (* Fs_util.read_file raises on anything it cannot read -- a directory sitting
+     where an issue file belongs, a permission problem, a truncated read. That
+     escaped as "ditz: internal error, uncaught exception" and took down every
+     command that scans the issue dir, including the error paths meant to
+     report it. Unreadable is a Result like any other failure. *)
   let read_yaml_file of_yaml path =
-    let content = Fs_util.read_file path in
-    parse_yaml of_yaml content path
+    match Fs_util.read_file path with
+    | content -> parse_yaml of_yaml content path
+    | exception Sys_error e -> Error (`Msg (Printf.sprintf "Failed to read %s: %s" path e))
+    | exception End_of_file ->
+      Error (`Msg (Printf.sprintf "Failed to read %s: unexpected end of file" path))
 
   let write_yaml_file to_yaml path value =
     let content = to_yaml_string to_yaml value in
@@ -86,14 +104,48 @@ module FS = struct
       let path = Filename.concat dir (Printf.sprintf "issue-%s.yaml" safe_id) in
       write_yaml_file issue_to_yaml path issue
 
+  (* One scan, one read per file: the issues that loaded, and the ids whose file
+     is present but unreadable. A caller needing both must take them from the
+     SAME pass -- two scans can disagree if readability changes between them,
+     and "in neither list" is precisely the state that lets a write clobber
+     data it could not read. *)
+  (* One scan: the issues that loaded, and every id whose FILE is present --
+     readable or not, and regardless of what id the file turns out to contain.
+     Occupancy has to come from the filename because that is what a write
+     targets: issue-foo.yaml holding "id: bar" is still the file an import of
+     "foo" would land on.
+
+     Error means the store could not be ENUMERATED, which is not the same as
+     finding it empty. Anything using this for overwrite protection must fail
+     closed on Error, or "could not look" reads as "nothing is there" and every
+     write looks safe. *)
+  let load_issues_classified dir =
+    match issue_files dir with
+    | exception Sys_error e ->
+      Error (`Msg (Printf.sprintf "Failed to list %s: %s" dir e))
+    | files ->
+      files
+      |> List.fold_left
+           (fun (ok, occupied) path ->
+             let occupied =
+               match id_of_issue_filename (Filename.basename path) with
+               | Some id -> id :: occupied
+               | None -> occupied
+             in
+             match load_issue path with
+             | Ok issue -> (issue :: ok, occupied)
+             | Error (`Msg e) ->
+               Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+               (ok, occupied))
+           ([], [])
+      |> fun (ok, occupied) -> Ok (List.rev ok, List.rev occupied)
+
   let load_issues dir =
-    issue_files dir
-    |> List.filter_map (fun path ->
-        match load_issue path with
-        | Ok issue -> Some issue
-        | Error (`Msg e) ->
-          Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-          None)
+    match load_issues_classified dir with
+    | Ok (issues, _) -> issues
+    | Error (`Msg e) ->
+      Logs.warn (fun m -> m "Failed to list issues: %s" e);
+      []
 
   let delete_issue dir id =
     match validate_id id with
@@ -163,21 +215,38 @@ module GitBackend = struct
       let path = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
       Git.write_to_branch ~path ~content ~commit_msg
 
+  let load_issues_classified () =
+    match Git.list_ditz_files_result () with
+    | Error (`Msg e) -> Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
+    | Ok files ->
+      files
+      |> List.filter (fun f ->
+          let basename = Filename.basename f in
+          String.length basename > 6 &&
+          String.sub basename 0 6 = "issue-" &&
+          Filename.check_suffix basename ".yaml")
+      |> List.fold_left
+           (fun (ok, occupied) path ->
+             let filename = Filename.basename path in
+             let occupied =
+               match id_of_issue_filename filename with
+               | Some id -> id :: occupied
+               | None -> occupied
+             in
+             match load_issue filename with
+             | Ok issue -> (issue :: ok, occupied)
+             | Error (`Msg e) ->
+               Logs.warn (fun m -> m "Failed to load %s: %s" path e);
+               (ok, occupied))
+           ([], [])
+      |> fun (ok, occupied) -> Ok (List.rev ok, List.rev occupied)
+
   let load_issues () =
-    let files = Git.list_ditz_files () in
-    files
-    |> List.filter (fun f ->
-        let basename = Filename.basename f in
-        String.length basename > 6 &&
-        String.sub basename 0 6 = "issue-" &&
-        Filename.check_suffix basename ".yaml")
-    |> List.filter_map (fun path ->
-        let filename = Filename.basename path in
-        match load_issue filename with
-        | Ok issue -> Some issue
-        | Error (`Msg e) ->
-          Logs.warn (fun m -> m "Failed to load %s: %s" path e);
-          None)
+    match load_issues_classified () with
+    | Ok (issues, _) -> issues
+    | Error (`Msg e) ->
+      Logs.warn (fun m -> m "Failed to list issues: %s" e);
+      []
 
   let delete_issue id ~commit_msg =
     match validate_id id with
@@ -256,6 +325,11 @@ let load_issues dir =
   | GitBranch -> GitBackend.load_issues ()
   | Filesystem d -> FS.load_issues (if dir = default_issue_dir then d else dir)
 
+let load_issues_classified dir =
+  match detect_backend () with
+  | GitBranch -> GitBackend.load_issues_classified ()
+  | Filesystem d -> FS.load_issues_classified (if dir = default_issue_dir then d else dir)
+
 let save_issue ?(commit_msg = "ditz: update issue") dir issue =
   match detect_backend () with
   | GitBranch -> GitBackend.save_issue issue ~commit_msg
@@ -290,8 +364,15 @@ let find_issue_by_id_in issues id_prefix =
   | [] -> Error (`Msg (Printf.sprintf "No issue found matching '%s'" id_prefix))
   | [issue] -> Ok issue
   | _ ->
-    let ids = List.map (fun (i : issue) -> i.id) matches in
-    Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids)))
+    (* An exact id names exactly one issue and is never ambiguous, even when it
+       is also a prefix of others: "goals-53u" must resolve to the epic itself
+       and not complain about "goals-53u-1". Without this, an issue whose id
+       prefixes a sibling's is unaddressable by any command. *)
+    (match List.find_opt (fun (i : issue) -> i.id = id_prefix) matches with
+     | Some issue -> Ok issue
+     | None ->
+       let ids = List.map (fun (i : issue) -> i.id) matches in
+       Error (`Msg (Printf.sprintf "Ambiguous ID '%s' matches: %s" id_prefix (String.concat ", " ids))))
 
 let find_issue_by_id dir id_prefix =
   find_issue_by_id_in (load_issues dir) id_prefix

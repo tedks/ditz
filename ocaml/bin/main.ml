@@ -1179,7 +1179,35 @@ let sync_cmd =
 
 let import_cmd =
   let doc = "Import issues from a beads `bd export` JSONL file" in
-  let info = Cmd.info "import" ~doc in
+  let man =
+    [ `S Manpage.s_description;
+      `P "Imports issues from a beads `bd export` JSONL file. The import is \
+          idempotent: an issue whose id is already present is left untouched.";
+      `P "Ids beads allows but ditz does not (e.g. dotted child ids such as \
+          $(b,goals-53u.1)) are renamed, not dropped, and every edge endpoint \
+          is rewritten to match. The original id is recorded in the issue's \
+          provenance. A beads $(b,parent-child) dependency becomes a blocking \
+          edge from child to parent, since an epic is not done until its \
+          children are. $(b,acceptance_criteria) is folded into the issue \
+          description.";
+      `P "An import is incremental: ids and edge endpoints are resolved \
+          against the issues already in the tracker, not just the file. A \
+          rename that would land on an id an unrelated issue already holds is \
+          refused rather than silently merged into it; re-importing the same \
+          issue is still an idempotent skip, proven by its beads_id \
+          provenance. An edge whose far side is an issue already present has \
+          that side completed, so no relationship is left recorded on one \
+          side only.";
+      `P "Exit status is 0 only when every issue imported without data loss. \
+          Anything dropped — an unparseable line, a field present with the \
+          wrong type, a colliding id, an issue ditz cannot store, a dependency \
+          edge to an id that will not exist — is reported as a warning and \
+          exits non-zero. Lossless outcomes are notices and do not affect the \
+          exit status: a rename, a completed far side, and any beads value \
+          ditz has no field for but keeps in provenance (priority, labels, \
+          unrecognized types and statuses)." ]
+  in
+  let info = Cmd.info "import" ~doc ~man in
   let file_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"FILE" ~doc:"JSONL file ('-' or omitted = stdin)") in
   let format_opt = Arg.(value & opt string "beads" & info ["format"] ~docv:"FMT" ~doc:"Source format (only 'beads' supported)") in
   let run file format json quiet () =
@@ -1200,50 +1228,195 @@ let import_cmd =
       in
       let beads, parse_warns = Ditz.Import_beads.parse_jsonl text in
       let valid id = Result.is_ok (Ditz.Storage.validate_id id) in
+      (* An import is incremental, not a fresh world: the tracker already holds
+         issues, and both id collisions and edge endpoints have to be judged
+         against them. Load once. *)
+      (* Both halves come from ONE scan. Asking twice lets the answers disagree
+         if a file changes in between, and an id missing from both is exactly
+         the state that lets a write clobber data it could not read.
+
+         An enumeration failure is fatal here rather than an empty store: this
+         scan is the overwrite protection, and "could not look" must never read
+         as "nothing is there". *)
+      match Ditz.Storage.load_issues_classified config.issue_dir with
+      | Error (`Msg e) ->
+        Fmt.epr "Error: cannot enumerate existing issues, so an import could overwrite them: %s@." e;
+        1
+      | Ok (existing, occupied_list) ->
+      let existing_ids = Hashtbl.create (List.length existing) in
+      List.iter (fun (i : Ditz.Types.issue) -> Hashtbl.replace existing_ids i.id i) existing;
+      (* Keyed by FILENAME, so it covers an unreadable file and a file whose
+         contents name a different id -- both are targets a write would land
+         on, and neither shows up in existing_ids. *)
+      let occupied = Hashtbl.create (List.length occupied_list) in
+      List.iter (fun id -> Hashtbl.replace occupied id ()) occupied_list;
+      (* Occupied by something that is not the readable issue of that id. *)
+      let blocked id = Hashtbl.mem occupied id && not (Hashtbl.mem existing_ids id) in
+      (* Does the issue already stored under [id] descend from beads issue
+         [beads_id]? Re-importing the same renamed issue must stay the benign
+         idempotent skip; only an UNRELATED occupant is a collision. Identity is
+         proven by the beads_id= provenance the first import wrote. *)
+      let is_same_beads_issue id beads_id =
+        match Hashtbl.find_opt existing_ids id with
+        | None -> false
+        | Some (i : Ditz.Types.issue) ->
+          Ditz.Import_beads.issue_has_beads_id i beads_id
+      in
+      (* Rename ids ditz can't store (beads' dotted child ids) rather than
+         dropping the issue, rewriting every edge endpoint to match. Runs BEFORE
+         dedup and reciprocal reconstruction so no stale id survives in a
+         reverse edge. A rename onto an id an unrelated issue already holds is
+         refused rather than silently merged. *)
+      let beads, rename_notices, rename_warns =
+        Ditz.Import_beads.sanitize_ids
+          ~taken:(fun ~orig ~renamed ->
+            (* An occupied id is taken even when we cannot read what occupies
+               it: granting the rename would only get the issue refused later. *)
+            (Hashtbl.mem occupied renamed || Hashtbl.mem existing_ids renamed)
+            && not (is_same_beads_issue renamed orig))
+          (* Resolve an endpoint that names no record in this file. An id the
+             tracker already holds resolves to itself. A beads id needing a
+             rename resolves ONLY to an issue that proves it descends from that
+             beads id; otherwise the sanitized form could name an unrelated
+             issue that merely happens to occupy it, and the edge would attach
+             to the wrong thing. Unresolved ids fall through to the existence
+             check, which drops and warns. *)
+          ~resolve_external:(fun id ->
+            if Hashtbl.mem existing_ids id then Some id
+            else
+              let s = Ditz.Import_beads.sanitize_id id in
+              if s <> id && Hashtbl.mem existing_ids s && is_same_beads_issue s id then Some s
+              else None)
+          beads
+      in
       (* Drop in-file duplicate ids (keep first). *)
       let beads, dup_warns = Ditz.Import_beads.dedup beads in
-      (* Drop whole beads whose OWN id ditz can't store, BEFORE reciprocal
-         reconstruction — otherwise a skipped invalid issue would still leak its
-         id into a valid issue's `blocks` via the reverse edge (save_issue only
-         validates an issue's own id, not its relation ids). [council convergence] *)
+      (* Anything still unstorable after renaming (an empty id) is dropped, and
+         that must happen BEFORE reciprocal reconstruction — otherwise a skipped
+         issue would still leak its id into a valid issue's `blocks` via the
+         reverse edge (save_issue only validates an issue's own id, not its
+         relation ids). [council convergence] *)
       let beads, id_warns =
         let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> valid b.id) beads in
         (ok, List.map (fun (b : Ditz.Import_beads.bead) -> Printf.sprintf "skipped invalid issue id '%s'" b.id) bad)
       in
-      (* Drop dependency edges whose endpoint id ditz can't store. *)
-      let beads, edge_warns = Ditz.Import_beads.sanitize_edges ~valid beads in
+      (* Refused here, before `importing` is built, so the edge machinery never
+         counts them as ids that will exist: an issue we decline to write is not
+         a valid endpoint, and leaving it in produced a dangling edge on some
+         OTHER new issue. *)
+      let beads, unreadable_warns =
+        let ok, bad = List.partition (fun (b : Ditz.Import_beads.bead) -> not (blocked b.id)) beads in
+        ( ok,
+          List.map
+            (fun (b : Ditz.Import_beads.bead) ->
+              Printf.sprintf
+                "%s: an issue file for this id exists but does not hold a readable issue with that \
+                 id; refusing to overwrite it"
+                b.id)
+            bad )
+      in
+      (* An edge may only survive if its endpoint will exist afterwards: a
+         record in this import, or an issue the tracker already holds. Keeping a
+         dangling edge would leave `ditz deps --check` rejecting the graph. *)
+      let importing = Hashtbl.create (List.length beads) in
+      List.iter (fun (b : Ditz.Import_beads.bead) -> Hashtbl.replace importing b.id ()) beads;
+      let known id = Hashtbl.mem importing id || Hashtbl.mem existing_ids id in
+      let beads, edge_warns = Ditz.Import_beads.sanitize_edges ~known beads in
       let reciprocal = Ditz.Import_beads.reciprocal_blocks beads in
+      let children = Ditz.Import_beads.children_by_parent beads in
       let reporter_fallback = Printf.sprintf "%s <%s>" config.name config.email in
-      let warnings = ref (parse_warns @ dup_warns @ id_warns @ edge_warns) in
+      let warnings =
+        ref (parse_warns @ rename_warns @ dup_warns @ id_warns @ unreadable_warns @ edge_warns)
+      in
+      let notices = ref rename_notices in
       let created = ref [] and skipped = ref [] in
+      (* Reciprocal edges landing on issues we are NOT creating (already
+         present, or never in this file). Recorded here and written afterwards,
+         because leaving one side unwritten is exactly the ONE-SIDED state
+         `deps --check` rejects. *)
+      let patch_existing : (string, string list * string list) Hashtbl.t = Hashtbl.create 8 in
+      let note_existing_edge ~on ~blocks ~blocked_by =
+        (* existing_ids was loaded before any write, so anything in it is
+           pre-existing and the create loop will skip it -- whether or not this
+           file also mentions it. Its far side is therefore ours to complete. *)
+        if Hashtbl.mem existing_ids on then begin
+          let b0, bb0 = Option.value (Hashtbl.find_opt patch_existing on) ~default:([], []) in
+          Hashtbl.replace patch_existing on (blocks @ b0, blocked_by @ bb0)
+        end
+      in
       List.iter
         (fun (b : Ditz.Import_beads.bead) ->
-          (* All remaining beads have valid ids. Idempotent: an existing issue
-             is left untouched. *)
-          match Ditz.Storage.find_issue_by_exact_id config.issue_dir b.id with
-          | Ok _ -> skipped := b.id :: !skipped
-          | Error _ ->
-            let blocks = try Hashtbl.find reciprocal b.id with Not_found -> [] in
-            let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks b in
+          (* Answered from the same scan as everything else rather than a fresh
+             read per bead: a third read is a third chance to disagree, and the
+             disagreement that matters here ends in an overwrite. *)
+          if Hashtbl.mem existing_ids b.id then
+            (* Idempotent: an existing issue keeps its fields. Its edges still
+               have to be completed, or the sides disagree. *)
+            skipped := b.id :: !skipped
+          else begin
+            let blocks = Option.value (Hashtbl.find_opt reciprocal b.id) ~default:[] in
+            let blocked_by_extra = Option.value (Hashtbl.find_opt children b.id) ~default:[] in
+            let issue = Ditz.Import_beads.to_issue ~reporter_fallback ~blocks ~blocked_by_extra b in
             (match Ditz.Storage.save_issue ~commit_msg:(Printf.sprintf "ditz: import %s from beads" b.id)
                      config.issue_dir issue with
-             | Ok () -> created := b.id :: !created
-             | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings))
+             | Ok () ->
+               created := b.id :: !created;
+               (* Queued only now that the issue is actually on disk. Queuing
+                  before the save meant a failed save still pointed existing
+                  issues at an id that was never written -- manufacturing the
+                  dangling edge this whole change exists to prevent. *)
+               List.iter (fun t -> note_existing_edge ~on:t ~blocks:[] ~blocked_by:[ issue.id ]) issue.blocks;
+               List.iter (fun t -> note_existing_edge ~on:t ~blocks:[ issue.id ] ~blocked_by:[]) issue.blocked_by
+             | Error (`Msg e) -> warnings := Printf.sprintf "failed to save %s: %s" b.id e :: !warnings)
+          end)
         beads;
+      (* Complete the far side of every edge that points at a pre-existing
+         issue. Additive only -- no field of theirs is touched -- so it is a
+         notice, not loss. *)
+      Hashtbl.iter
+        (fun id (add_blocks, add_blocked_by) ->
+          match Hashtbl.find_opt existing_ids id with
+          | None -> ()
+          | Some (i : Ditz.Types.issue) ->
+            let merged_blocks = Ditz.Import_beads.dedup_strings (i.blocks @ add_blocks) in
+            let merged_blocked_by = Ditz.Import_beads.dedup_strings (i.blocked_by @ add_blocked_by) in
+            if merged_blocks <> i.blocks || merged_blocked_by <> i.blocked_by then begin
+              let updated = { i with blocks = merged_blocks; blocked_by = merged_blocked_by } in
+              match
+                Ditz.Storage.save_issue
+                  ~commit_msg:(Printf.sprintf "ditz: complete edges on %s from beads import" id)
+                  config.issue_dir updated
+              with
+              | Ok () ->
+                notices :=
+                  Printf.sprintf "completed the other side of an edge on existing issue '%s'" id
+                  :: !notices
+              | Error (`Msg e) ->
+                warnings := Printf.sprintf "failed to complete edges on %s: %s" id e :: !warnings
+            end)
+        patch_existing;
+      let notices = List.rev !notices in
       let created = List.rev !created and skipped = List.rev !skipped in
       let warnings = List.rev !warnings in
       (match mode with
        | Json ->
          let lst l = "[" ^ String.concat "," (List.map (fun s -> Printf.sprintf "\"%s\"" (Ditz.Types.escape_json_string s)) l) ^ "]" in
-         Fmt.pr {|{"created":%s,"skipped":%s,"warnings":%s}@.|}
-           (lst created) (lst skipped) (lst warnings)
+         Fmt.pr {|{"created":%s,"skipped":%s,"warnings":%s,"notices":%s}@.|}
+           (lst created) (lst skipped) (lst warnings) (lst notices)
        | Quiet -> List.iter (fun id -> Fmt.pr "%s@." id) created
        | Human ->
+         List.iter (fun n -> Fmt.epr "note: %s@." n) notices;
          List.iter (fun w -> Fmt.epr "warning: %s@." w) warnings;
          Fmt.pr "Imported %d issue(s) from beads; %d already present (skipped).@."
-           (List.length created) (List.length skipped));
-      (* Warnings alone don't fail the import; an outright read/format error did. *)
-      0
+           (List.length created) (List.length skipped);
+         if warnings <> [] then
+           Fmt.epr "Import INCOMPLETE: %d problem(s) above lost data; exiting non-zero.@."
+             (List.length warnings));
+      (* Exit status is the only signal a script reliably reads, so anything
+         that lost data fails the command. Renames are lossless and stay
+         notices, and an already-present issue is idempotent re-import, not a
+         problem — neither affects the status. *)
+      if warnings = [] then 0 else 1
   in
   Cmd.v info Term.(const run $ file_arg $ format_opt $ json_flag $ quiet_flag $ setup_log_term)
 
