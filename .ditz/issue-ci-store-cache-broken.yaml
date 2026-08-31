@@ -61,3 +61,9 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-08-31T19:16:06-00:00
+  who: Ted Smith
+  what: blocked by binary-cache-publish
+  comment: ""
+blocked_by:
+- binary-cache-publish
