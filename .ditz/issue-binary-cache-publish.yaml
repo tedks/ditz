@@ -1,0 +1,79 @@
+id: binary-cache-publish
+title: Publish a binary cache so consumers stop compiling the opam closure
+desc: 'ditz publishes to no binary cache. 129 store paths in the package closure --
+  including ocaml-base-compiler-5.1.1 -- return 404 from both cache.nixos.org and
+  devenv.cachix.org, so every cold machine compiles an OCaml compiler from source.
+
+
+  MEASURED (2026-08-31):
+
+  - packages.ditz: 554.5 MiB, 143 paths, 129 not substitutable
+
+  - devShells.default: 1.8 GiB, 285 paths, the SAME 128 paths not substitutable (plus
+  each root''s own output)
+
+  - The from-source burden lives entirely in the package. The devShell adds zero compilation,
+  so there is nothing to gain by shaping the shell.
+
+  - Cost: ~258.7s of compilation per cold realisation, of which 168.5s is ocaml-base-compiler
+  alone.
+
+  - Cache size: 529.7 MB uncompressed, ~115 MB compressed (4.65x ratio observed on
+  cache.nixos.org).
+
+
+  WHO PAYS THIS TODAY (the same opam chain appears in all of their flake.locks):
+
+  - ditz''s own CI, every run (see ci-store-cache-broken)
+
+  - tedks/goals CI and claude.yml, plus every fresh clone entering the dev shell
+
+  - tedks/home-manager-config (~/Projects/hm-apply-master), and the same flake by
+  submodule in dotfiles -- so a fresh-machine `home-manager switch` builds an OCaml
+  compiler too
+
+
+  goals worked around this in PR #119 by keeping ditz out of its CI/deploy shells.
+  That is a fix at the consumer; this is the fix at the source, and it covers consumers
+  that cannot work around it.
+
+
+  FEASIBILITY: repo is public and GPL-3.0 (qualifies for the Cachix free open-source
+  tier; ~115 MB against a 5 GB allowance). packages.default exists and builds. No
+  unfree packages.
+
+
+  THE IMPLEMENTATION SUBTLETY THAT MATTERS: opam-nix uses import-from-derivation.
+  The eval prelude is ~43.2s (flake unpack, opam-repo, resolve, ~30 *.opam.json derivations)
+  and those intermediates are INSIDE the 129-path 404 set. `nix build .#ditz && cachix
+  push` pushes only the output closure, misses every IFD intermediate, and consumers
+  keep compiling. CI must use `cachix watch-exec` (or watch-store) so everything realised
+  during eval AND build is pushed.
+
+
+  ALSO: the flake has no nixConfig. Adding extra-substituters/extra-trusted-public-keys
+  covers trusted users; untrusted users (most CI) must name the substituter explicitly.
+  goals already does this for devenv.cachix.org, so the pattern is available to copy.
+
+
+  LIMIT: x86_64-linux only unless a mac runner is added, so homes-imac would not benefit.
+
+
+  HOW TO KNOW IT WORKED (do not skip this -- see ci-store-cache-broken for what happens
+  when nobody checks): on a machine with an empty store, `nix build .#ditz` should
+  download rather than build. Concretely, `nix path-info --store https://<cache>.cachix.org
+  <path>` should succeed for ocaml-base-compiler-5.1.1, and a cold consumer''s realisation
+  time should drop from ~250s to the ~10s that ~115 MB takes to fetch.'
+type: task
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-31T19:16:06-00:00
+references: []
+log_events:
+- time: 2026-08-31T19:16:06-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
