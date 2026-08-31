@@ -1,0 +1,31 @@
+id: license-not-detected
+title: GitHub does not detect the LICENSE file
+desc: '`gh repo view tedks/ditz --json licenseInfo` returns null, so GitHub shows
+  no license for the repository.
+
+
+  LICENSE is present at the repo root and is the standard GPLv3 text (674 lines),
+  so this is a classifier miss rather than a missing license -- usually caused by
+  the file diverging from the canonical text GitHub''s licensee gem matches against
+  (a modified header, or the "How to Apply These Terms" appendix removed).
+
+
+  Worth fixing because the repo is a dependency of at least three other repositories,
+  and because binary-cache-publish depends on the project reading as open-source for
+  the Cachix free tier.
+
+
+  Verify with: `gh repo view tedks/ditz --json licenseInfo` returning spdxId GPL-3.0.'
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-31T19:16:06-00:00
+references: []
+log_events:
+- time: 2026-08-31T19:16:06-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
