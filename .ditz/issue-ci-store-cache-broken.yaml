@@ -1,0 +1,63 @@
+id: ci-store-cache-broken
+title: CI nix store cache has never worked; remove it rather than repair it
+desc: '.github/workflows/ci.yml pairs cachix/install-nix-action@v31 with nix-community/cache-nix-action@v6.
+  The cache has never once delivered a hit that saved work.
+
+
+  ROOT CAUSE: install-nix-action does a multi-user install (log: "Switching to the
+  Multi-user Installer", --daemon --daemon-user-count 8), so /nix/store is root-owned.
+  cache-nix-action''s restore runs /usr/bin/tar as the unprivileged `runner` user
+  and cannot write there. Run 32432136898 reported "Found a cache with the given primary-key",
+  restored 734 MB, then emitted 411,236 tar errors: "Cannot mkdir: Permission denied"
+  / "Cannot open: Permission denied" on /nix/store and /nix/var. cache-nix-action''s
+  README pairs it with nixbuild/nix-quick-install-action (runner-owned /nix) plus
+  keep-env-derivations/keep-outputs; none of that is set here.
+
+
+  PROOF IT DELIVERS NOTHING (two independent checks):
+
+  1. The from-source build sets of the "cache hit" run and a "cache miss" master run
+  are identical -- 129 derivations each, ocaml-base-compiler-5.1.1 included.
+
+  2. 16 successful runs span 4.1-6.0 min, mean 5.5, with no bimodality. A working
+  cache produces a warm/cold split; there is none.
+
+
+  Additionally, master pushes never find a cache at all ("Could not find a cache",
+  both primary key and prefix) because caches saved on PR branches are not visible
+  to the default branch.
+
+
+  CURRENT COST: 258.7s/run of recompilation the cache is supposed to prevent, plus
+  23-38s of futile restore and up to 16s of futile save.
+
+
+  THE COMMENTS ARE ALSO WRONG. ci.yml says "Cold toolchain build is ~15 min; headroom
+  over a warm-cache ~5 min run". Observed cold is 5.5 min. The "warm" state it describes
+  has never occurred, and the "cold" figure overstates reality by ~3x. Someone reasoned
+  about a cache, wrote a comment describing its behaviour, configured it, and never
+  checked the number.
+
+
+  RECOMMENDATION: delete the cache-nix-action step rather than repair it. Repairing
+  it (swap to nix-quick-install-action, set keep-outputs) would help only ditz''s
+  own CI and decays anyway -- GitHub caches are 7-day-idle-evicted, capped at 10 GB/repo,
+  and PR-scoped caches are invisible to master, so cold runs recur at full cost. binary-cache-publish
+  subsumes it and helps every consumer. Keeping a second, decaying mechanism alive
+  is how you end up with another comment describing a state that never occurs.
+
+
+  Fix the comments in the same change.'
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-31T19:16:06-00:00
+references: []
+log_events:
+- time: 2026-08-31T19:16:06-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
