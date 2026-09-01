@@ -81,5 +81,41 @@ log_events:
   who: Ted Smith
   what: blocks ci-store-cache-broken
   comment: ""
+- time: 2026-09-01T16:34:24-00:00
+  who: Ted Smith
+  what: commented
+  comment: "Verified the IFD trap directly, so it is no longer a warning to take on
+    trust.\n\n`nix path-info -r .#ditz` is **143 paths**, and it contains **zero**
+    of the eval-time intermediates:\n\n    'opam.json' in output closure: 0\n    'resolve'
+    \  in output closure: 0\n    'opam-repo' in output closure: 0\n\nMeanwhile the
+    local store holds ~346 such intermediates from evaluating this flake, and the
+    ones I sampled all return 404 from cache.nixos.org (ocaml-config.3.opam.json,
+    ditz.opam.json, ppx_deriving.6.0.3.opam.json.drv).\n\nSo `nix build .#ditz &&
+    cachix push <cache> ./result` pushes 143 paths, misses every IFD intermediate,
+    and each consumer still pays the ~43s eval prelude rebuilding them. The push step
+    would be green and the cache would look populated. That is the failure this issue
+    exists to avoid, and it is easy to walk into.\n\nWHAT TO DO INSTEAD -- push everything
+    realised during the job, not the output closure:\n\n    - uses: cachix/install-nix-action@v31\n
+    \   - uses: cachix/cachix-action@v15\n      with:\n        name: <cache-name>\n
+    \       authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}\n    - run: nix build .#ditz\n
+    \   - run: nix develop --command bash -c 'cd ocaml && dune build'\n\ncachix-action
+    pushes store paths added during the job, which covers eval-time realisations.
+    If that proves not to be the case in practice, `cachix watch-exec <cache-name>
+    -- nix build .#ditz` is the explicit form. Confirm which you have before trusting
+    it -- see the verification below, and note this is exactly the kind of assumption
+    that produced ci-store-cache-broken.\n\nCONSUMER SIDE. Add to ditz's flake:\n\n
+    \   nixConfig = {\n      extra-substituters = [ \"https://<cache-name>.cachix.org\"
+    ];\n      extra-trusted-public-keys = [ \"<cache-name>.cachix.org-1:...\" ];\n
+    \   };\n\nThat covers trusted users. Untrusted ones (most CI) must name the substituter
+    themselves; tedks/goals already does this for devenv.cachix.org via cachix/cachix-action,
+    so the pattern is there to copy.\n\nVERIFICATION -- do this before closing, on
+    a machine or runner with a cold store:\n\n    nix path-info --store https://<cache-name>.cachix.org
+    \\\n      /nix/store/<hash>-ocaml-base-compiler-5.1.1     # must resolve\n    nix
+    path-info --store https://<cache-name>.cachix.org \\\n      /nix/store/<hash>-ditz.opam.json
+    \               # an IFD path: must ALSO resolve\n\nIf the compiler resolves and
+    the .opam.json does not, the push captured only the output closure and consumers
+    still compile -- the cache is populated and useless. The end-to-end check is that
+    a cold `nix build .#ditz` downloads instead of building, and that ditz's own CI
+    job drops from ~5.5 min toward ~1-1.5 min."
 blocks:
 - ci-store-cache-broken
