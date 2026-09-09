@@ -69,16 +69,18 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## History
 
 ditz was originally created by William Morgan in 2008 as a Ruby gem. This
-repository is a from-scratch OCaml rewrite, begun in 2026 by Edward Smith,
-that keeps the original's core idea — plain-text, git-friendly issue
-files — while dropping the Ruby implementation, its plugin system, and its
-RubyGems packaging in favor of a single static binary and a design aimed
-squarely at git-and-files workflows, including ones driven by AI agents.
+repository is a from-scratch OCaml rewrite by Edward Smith that keeps the
+original's core idea — plain-text, git-friendly issue files — while
+dropping the Ruby implementation, its plugin system, and its
+RubyGems packaging in favor of a single binary and a design aimed squarely
+at git-and-files workflows, including ones driven by AI agents.
 
 ## License
 
-Copyright (C) 2008 William Morgan.
-Copyright (C) 2025, 2026 Edward Smith.
+The original 2008 Ruby implementation was copyright William Morgan (see
+[History](#history) above). This OCaml implementation shares no code with
+it — it's a from-scratch rewrite of the same idea, not a derivative work —
+and is copyright (C) 2026 Edward Smith.
 
 This program is free software: you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the Free
