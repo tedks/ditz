@@ -1,5 +1,5 @@
 {
-  description = "ditz - distributed issue tracker (OCaml rewrite)";
+  description = "ditz - distributed issue tracker";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,9 +16,8 @@
         pkgs = nixpkgs.legacyPackages.${system};
         opam = opam-nix.lib.${system};
 
-        # Build the project from the ocaml subdirectory
         # API: (buildDuneProject { } "package-name" ./path { ocaml = "version"; }).package-name
-        scope = opam.buildDuneProject { } "ditz" ./ocaml { ocaml = "5.1.1"; };
+        scope = opam.buildDuneProject { } "ditz" ./. { ocaml = "5.1.1"; };
 
         # The main package
         ditz = scope.ditz;
@@ -37,9 +36,6 @@
             # OCaml dev tools
             ocamlPackages.ocamlformat
             ocamlPackages.ocaml-lsp
-
-            # For the original Ruby ditz (comparison/compat testing)
-            ruby
 
             # Useful for development
             git
