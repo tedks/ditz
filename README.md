@@ -62,6 +62,10 @@ See [INSTALL.md](INSTALL.md). `ditz` is distributed as a Nix flake:
 nix profile install github:tedks/ditz#ditz
 ```
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## History
 
 ditz was originally created by William Morgan in 2008 as a Ruby gem. This
