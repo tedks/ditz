@@ -26,7 +26,7 @@ jobs:
       # compile of the OCaml compiler (~15 min) without it.
       - uses: nix-community/cache-nix-action@v6
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'ocaml/ditz.opam') }}
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', 'ditz.opam') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
           gc-max-store-size-linux: 5G
 
@@ -37,7 +37,7 @@ jobs:
           git config --global user.email "ci@invalid.example"
 
       - name: Build
-        run: nix develop --command bash -c 'cd ocaml && dune build'
+        run: nix develop --command bash -c 'dune build'
 
       - name: Test
-        run: nix develop --command bash -c 'cd ocaml && dune runtest'
+        run: nix develop --command bash -c 'dune runtest'

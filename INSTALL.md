@@ -4,9 +4,6 @@ ditz is distributed as a Nix flake. Every machine builds (or substitutes) the
 binary for its own system, so there is no cross-CPU compatibility concern across
 a heterogeneous fleet — no prebuilt-binary portability traps.
 
-> Legacy note: the old `INSTALL` file (no `.md`) documents the original Ruby
-> ditz via RubyGems. This file is for the OCaml rewrite.
-
 ## Prerequisites
 
 - **Nix** with flakes enabled. If `nix flake --help` errors, enable flakes once:
@@ -105,9 +102,9 @@ binary yourself:
 
 ```
 git clone https://github.com/tedks/ditz && cd ditz
-nix develop --command bash -c 'cd ocaml && dune build'
-# the binary is at ocaml/_build/default/bin/main.exe (installed name: ditz)
-cp ocaml/_build/default/bin/main.exe ~/.local/bin/ditz
+nix develop --command bash -c 'dune build'
+# the binary is at _build/default/bin/main.exe (installed name: ditz)
+cp _build/default/bin/main.exe ~/.local/bin/ditz
 ```
 
 ## Uninstall
