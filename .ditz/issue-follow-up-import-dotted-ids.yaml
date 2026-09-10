@@ -1,0 +1,73 @@
+id: follow-up-import-dotted-ids
+title: 'importer: dotted beads sub-issue IDs are silently skipped, dropping epic subtasks'
+desc: 'Hit this migrating tedks/website from beads to ditz today.
+
+
+  beads gives epic subtasks dotted IDs: an epic `website-mrb` ("Build
+
+  chaos.online corporate site") has subtasks `website-mrb.1` .. `website-mrb.9`,
+
+  each with a `dependencies: [{type: parent-child, depends_on_id: website-mrb}]`
+
+  entry. `ditz import` rejects any issue `id` containing a `.` outright and
+
+  skips it with `warning: skipped invalid issue id ''<id>''` -- no error, no
+
+  non-zero exit, just silently missing data. This is upstream of
+
+  follow-up-import-parent-child (which is about the parent-child edge being
+
+  dropped for issues that DO get imported); dotted-ID issues never reach that
+
+  code path at all because they''re rejected before then.
+
+
+  Real numbers from the website repo''s `bd export`: 107 issues total, 23
+
+  imported, 84 skipped. Of the 84 skipped, 30 were still `open` (active,
+
+  undone work) spanning 12 epics. The 12 epic issues themselves imported fine
+
+  (their own IDs have no dot); only their subtasks vanished. Net effect: every
+
+  epic looks empty post-import even though most of its checklist is still
+
+  outstanding -- a silent, large-magnitude loss on the single most common
+
+  beads shape (an epic with subtasks), not an edge case.
+
+
+  Suggested fix: don''t reject dotted IDs outright. Either (a) accept the beads
+
+  ID as-is (ditz IDs are opaque strings elsewhere -- phase6-sync,
+
+  follow-up-ci-concurrency already contain `-`; nothing in FORMAT.md requires
+
+  excluding `.`), or (b) sanitize on import (`.` -> `-`) and feed the existing
+
+  `parent-child` dependency into whatever follow-up-import-parent-child lands
+
+  on for `blocks`/`blocked_by`, so the hierarchy survives instead of
+
+  disappearing. Whichever is chosen, `ditz import` should report a per-run
+
+  summary distinguishing "skipped: unsupported ID shape" from "skipped:
+
+  already present" -- right now both look like routine no-op skips in the
+
+  output, which is how 84 dropped issues went unnoticed until someone counted
+
+  by hand.'
+type: bugfix
+component: import
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-10T00:49:54-00:00
+references: []
+log_events:
+- time: 2026-09-10T00:49:54-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
