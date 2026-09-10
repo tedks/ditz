@@ -1,0 +1,20 @@
+id: follow-up-import-comments
+title: 'importer: preserve beads issue comments on import'
+desc: "ditz import drops beads 'comments' arrays entirely \u2014 not migrated into
+  log_events. Lost in the dotfiles migration: council trail on dotfiles-xnm, btrfs
+  context on dotfiles-anj, sm-* notes. Only priority/labels/updated_at + dep provenance
+  kept. Proposal: map each beads comment to a ditz log_event (what=commented, author
+  + created_at + text)."
+type: feature
+component: default
+release:
+reporter: Test User <test@example.com>
+status: unstarted
+disposition:
+creation_time: 2026-07-17T16:56:09-00:00
+references: []
+log_events:
+- time: 2026-07-17T16:56:09-00:00
+  who: Test User
+  what: created
+  comment: ""

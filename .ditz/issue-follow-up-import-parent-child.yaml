@@ -1,0 +1,20 @@
+id: follow-up-import-parent-child
+title: 'importer: natively convert beads parent-child deps to ditz edges'
+desc: 'ditz import only converts beads ''blocks'' deps to edges; ''parent-child''
+  dropped to provenance with no edge, losing epic+subtask hierarchy. Workaround in
+  dotfiles cutover: pre-rewrite parent-child into a sibling ''blocks'' dep. Proposal:
+  import parent-child natively (parent blocks child, matching beads depends_on), noting
+  original type in provenance.'
+type: feature
+component: default
+release:
+reporter: Test User <test@example.com>
+status: unstarted
+disposition:
+creation_time: 2026-07-17T16:56:09-00:00
+references: []
+log_events:
+- time: 2026-07-17T16:56:09-00:00
+  who: Test User
+  what: created
+  comment: ""

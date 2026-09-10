@@ -1,0 +1,19 @@
+id: follow-up-show-exact-id-match
+title: 'id resolution: prefer an exact id match over an ambiguous prefix'
+desc: When an id is a strict prefix of others (dotfiles-ktl vs dotfiles-ktl-1..4,
+  after dashing beads sub-issue ids), 'ditz show/deps/close dotfiles-ktl' errors 'Ambiguous
+  ID' even though dotfiles-ktl is an exact id. An exact full-id match should win over
+  prefix candidates.
+type: bugfix
+component: default
+release:
+reporter: Test User <test@example.com>
+status: unstarted
+disposition:
+creation_time: 2026-07-17T16:56:09-00:00
+references: []
+log_events:
+- time: 2026-07-17T16:56:09-00:00
+  who: Test User
+  what: created
+  comment: ""

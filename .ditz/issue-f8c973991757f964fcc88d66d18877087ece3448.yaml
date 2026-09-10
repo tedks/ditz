@@ -1,0 +1,23 @@
+id: f8c973991757f964fcc88d66d18877087ece3448
+title: init writes AGENTS.md with mode 600
+desc: 'The onboarding block written by `ditz init` created AGENTS.md as -rw-------
+  rather than -rw-r--r--. Noticed in the goals migration, where sibling files are
+  664 and git records 100644 for AGENTS.md.
+
+
+  Git does not track the read bits, so this causes no diff, but it is surprising for
+  a file every agent and contributor reads, and it would matter for anything serving
+  the repo directly.'
+type: bugfix
+component: default
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-08-20T23:34:59-00:00
+references: []
+log_events:
+- time: 2026-08-20T23:34:59-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
