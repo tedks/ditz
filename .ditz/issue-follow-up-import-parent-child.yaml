@@ -18,3 +18,12 @@ log_events:
   who: Test User
   what: created
   comment: ""
+- time: 2026-09-10T00:50:01-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Related: follow-up-import-dotted-ids -- issues whose beads ID itself contains
+    a dot (the standard beads epic-subtask numbering, <epic>.<n>) never reach this
+    parent-child-edge code path at all, because ditz import''s ID validator rejects
+    and skips them before then. Found while migrating tedks/website: 84/107 issues
+    skipped, 30 of them open. Fixing dotted-ID acceptance is probably a prerequisite
+    for this issue''s fix to matter for real beads exports.'
