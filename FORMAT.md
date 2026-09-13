@@ -64,6 +64,22 @@ Enums are written as plain scalars (`status: closed`), so `grep "status: closed"
 works. The legacy variant-map form (`status:\n  Closed: []`) is still read and
 is rewritten to scalar form on the next save.
 
+## Ids are names
+
+There is no separate name field: an issue's `id` is its name.
+
+- `ditz add "title"` mints a 40-character SHA1. `ditz add "title" --id
+  login-firefox` makes `login-firefox` the id instead.
+- An id may contain only letters, digits, `-` and `_`, and it must match the
+  file name (`issue-<id>.yaml`).
+- Ids are permanent: other issues' `blocks` / `blocked_by` lists point at them,
+  so there is no rename.
+- `add --id` is idempotent, not an update. If the id already exists, nothing
+  changes (the title, description, type and component given are ignored).
+  Edit an existing issue with `ditz set <id>`.
+- On the CLI any unique prefix resolves an id, and an exact id always wins
+  over longer ids it prefixes.
+
 ## Dependencies and "epics"
 
 The dependency graph is just the `blocks` / `blocked_by` lists. `blocked_by` is

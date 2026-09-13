@@ -12,7 +12,8 @@ an AI agent that just wants to read and write structured state as plain text.
 
 ```
 ditz init                     # creates the ditz-metadata branch
-ditz add "Fix the thing"      # add an issue
+ditz add "Fix the thing"      # add an issue (id is a SHA1)
+ditz add "Fix it" --id fix-it # ...or name it: --id is the id (see FORMAT.md)
 ditz ready                    # what's unblocked and unstarted?
 ditz start <id>               # mark it in progress
 ditz close <id> --fixed       # close it out
