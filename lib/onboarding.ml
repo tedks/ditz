@@ -23,8 +23,13 @@ Create / inspect:
 - `ditz add "title" -t bugfix|feature|task -c <component> --desc "..."`
 - `ditz show <id>` · `ditz list --status unstarted|in_progress|paused|closed` · `ditz search <q>`
 - `--json` on any command for machine output; `--ids-only` for just ids
-- ids: copy them from output; a unique prefix works (like git hashes);
-  `--id <name>` sets a deterministic id (re-creating with it is idempotent)
+
+Naming issues: there is no separate name field — `--id` IS the name.
+- `ditz add "title" --id <name>` makes `<name>` the permanent id (letters,
+  digits, `-`, `_`); without `--id` you get a SHA1. Any unique prefix of an id
+  works on the CLI, and an exact id always wins.
+- Re-running `add --id <name>` for an existing issue changes NOTHING (safe to
+  retry, but not an update). Edit with `ditz set <id> --title/--desc/-t/-c`.
 
 Structure (there are no priority / epic / parent fields — urgency is derived,
 hierarchy is expressed in the graph):
