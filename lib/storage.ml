@@ -37,7 +37,7 @@ let validate_id id =
     Ok id
   else
     Error (`Msg (Printf.sprintf
-      "Invalid issue id '%s' (ids may contain only letters, digits, '-' and '_')" id))
+      "Invalid issue id '%s' (ids may contain only ASCII letters, digits, '-' and '_')" id))
 
 (** Detect which backend to use *)
 let detect_backend () =
