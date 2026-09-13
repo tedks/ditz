@@ -52,6 +52,27 @@ again="$("$BIN" add "Second" --id idem1 -t notatype --ids-only)"; rc=$?
 check "idempotent re-add w/ bad type still succeeds" 0 "$rc"
 contains "idempotent returns same id" "idem1" "$again"
 contains "idempotent left type unchanged" '"type":"feature"' "$("$BIN" show idem1 --json)"
+# The hint below is human-mode only: --ids-only must stay exactly the id.
+if [ "$again" = "idem1" ]; then echo "ok: ids-only re-add prints only the id"
+else echo "FAIL: ids-only re-add printed more than the id: $again"; fail=1; fi
+
+# --id is the issue's name, and a re-add is a no-op, not an update. Agents have
+# misread both, so the help, the re-add message and the invalid-id error must
+# each say so. Help is whitespace-squeezed: cmdliner re-wraps paragraphs.
+help="$("$BIN" add --help=plain 2>&1 | tr -s '[:space:]' ' ')"
+contains "add --help: --id is the name" "there is no separate name field" "$help"
+contains "add --help: re-add is not an update" "idempotent, not an update" "$help"
+contains "add --help: names ditz set" "ditz set NAME" "$help"
+out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" 2>&1)"; rc=$?
+check "human re-add succeeds" 0 "$rc"
+contains "re-add says nothing changed" "already exists; nothing changed" "$out"
+contains "re-add names the remedy" "ditz set idem1" "$out"
+contains "re-add left title unchanged" '"title":"First"' "$("$BIN" show idem1 --json)"
+before="$("$BIN" list --ids-only | wc -l | tr -d ' ')"
+out="$("$BIN" add "Dotted" --id "has.dot" 2>&1)"; check "add --id with a dot rejected" 1 "$?"
+contains "invalid id names the allowed characters" "letters, digits, '-' and '_'" "$out"
+after="$("$BIN" list --ids-only | wc -l | tr -d ' ')"
+check "invalid --id created nothing" "$before" "$after"
 
 # 7.2 status as data
 "$BIN" close "$id" --wontfix --reason "superseded" >/dev/null 2>&1

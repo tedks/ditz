@@ -106,9 +106,31 @@ let read_stdin () =
 
 let add_cmd =
   let doc = "Add a new issue" in
-  let info = Cmd.info "add" ~doc in
+  (* --id is the only way to name an issue, and agents have misread it both as
+     "not a name" (asking for a separate name field) and as an upsert (re-adding
+     with a new title, which silently changes nothing). Spell both out here,
+     where an agent looks once it is unsure. *)
+  let man = [
+    `S Manpage.s_description;
+    `P "Creates an issue and prints its id. Every other command refers to the \
+        issue by that id, or by any unique prefix of it.";
+    `P "Without $(b,--id) the id is a 40-character SHA1. With $(b,--id) NAME, \
+        NAME is the id: the issue's one and only name (there is no separate \
+        name field). It is permanent, it becomes the file name \
+        (issue-NAME.yaml), and it may contain only letters, digits, '-' and '_'.";
+    `P "$(b,--id) makes add idempotent, not an update: if NAME already exists, \
+        add changes nothing and exits 0, ignoring the title, description, type \
+        and component given. To change an existing issue use \
+        $(b,ditz set) NAME.";
+    `S Manpage.s_examples;
+    `Pre "ditz add \"Login fails on Firefox\" -t bugfix -c auth --desc \"Repro: ...\"\n\
+          ditz add \"Login fails on Firefox\" --id login-firefox -t bugfix\n\
+          ditz add \"Login fails on Firefox\" --id login-firefox   # again: no-op\n\
+          ditz set login-firefox --title \"Login fails on Firefox and Safari\"";
+  ] in
+  let info = Cmd.info "add" ~doc ~man in
   let title_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TITLE") in
-  let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"ID" ~doc:"Use specific ID (idempotent - returns existing issue if ID exists)") in
+  let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"NAME" ~doc:"Name the issue: use NAME as its permanent id instead of a SHA1 (letters, digits, '-', '_'). If NAME already exists, nothing is changed; use $(b,ditz set) to edit it.") in
   let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Issue type (bugfix, feature, task; default task)") in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
@@ -182,7 +204,11 @@ let add_cmd =
         (match mode with
          | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
          | Quiet -> Fmt.pr "%s@." existing.id
-         | Human -> Fmt.pr "Issue %s already exists@." existing.id);
+         | Human ->
+           (* Name the remedy: a re-add with a new title/desc looks like an
+              update but is a no-op (seen in real use). *)
+           Fmt.pr "Issue %s already exists; nothing changed (use 'ditz set %s' to edit it)@."
+             existing.id existing.id);
         0
       | Ok None ->
         (* Creating: now resolve description and validate creation-only fields. *)
