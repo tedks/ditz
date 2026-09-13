@@ -1,0 +1,21 @@
+id: id-leading-dash
+title: Ids starting with '-' are accepted but need '--' to address on the CLI
+desc: 'validate_id accepts a leading ''-'', so ''ditz add x --id=-dash'' creates issue
+  ''-dash''. Afterwards ''ditz set -dash'' fails as a cmdliner parse error (exit 124),
+  and PR #27''s re-add hint (''use ditz set -dash'') is unusable for such ids; only
+  ''ditz set --title x -- -dash'' works. Consider rejecting a leading ''-'' for NEW
+  ids at add/import time (not in validate_id, which also gates saves of existing files).
+  Found by the Claude council reviewer on PR #27.'
+type: bugfix
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-13T05:24:08-00:00
+references: []
+log_events:
+- time: 2026-09-13T05:24:08-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
