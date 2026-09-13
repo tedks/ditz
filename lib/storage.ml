@@ -36,7 +36,8 @@ let validate_id id =
   else if String.for_all is_valid_char id then
     Ok id
   else
-    Error (`Msg (Printf.sprintf "Invalid issue id '%s'" id))
+    Error (`Msg (Printf.sprintf
+      "Invalid issue id '%s' (ids may contain only letters, digits, '-' and '_')" id))
 
 (** Detect which backend to use *)
 let detect_backend () =
