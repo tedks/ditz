@@ -1,0 +1,31 @@
+id: write-lock-recheck
+title: 'No write lock: concurrent writes can lose data (create race, lost updates,
+  index.lock)'
+desc: 'Every ditz write is read-modify-write with no lock. Storage.save_issue replaces
+  the file atomically (temp + rename) but never checks whether it changed since the
+  read, and nothing serializes the git add/commit in the shared .ditz-worktree. Consequences:
+  (1) two concurrent ''add --id X'' can both pass the occupancy check and the last
+  writer wins (council on PR #28; the check-to-save window includes reading --desc-stdin);
+  (2) concurrent comment/start/close on the same issue can drop a log event; (3) parallel
+  agents hit ''.git/worktrees/-ditz-worktree/index.lock: File exists'' and commit
+  failures with no message (4 index.lock failures plus 2 empty-message commit failures
+  in pairmarket on 2026-06-27 and 07-06; one orchestrator prompt worked around it);
+  (4) write_to_branch runs ''git commit'' with no pathspec, so anything left staged
+  by a failed write gets swept into the next unrelated commit (likely how the qa/qb
+  test issues landed in fc2ca40). Proposed: one storage-level exclusive lock (flock
+  on a file in the git common dir or the .ditz dir) held across re-read, check, write
+  and commit, with the re-check done under the lock; commit only the issue''s own
+  path. Evidence: council reviews of PR #28, tower0 transcript mining 2026-09-13.'
+type: bugfix
+component: storage
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-13T05:34:12-00:00
+references: []
+log_events:
+- time: 2026-09-13T05:34:12-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
