@@ -1,0 +1,24 @@
+id: onboard-refresh-stale-block
+title: onboard can't refresh an existing ditz block, so onboarded repos keep stale
+  guidance
+desc: 'Onboarding.install skips any file that already has the start marker (lib/onboarding.ml,
+  write_block). So improved snippet text, like PR #27''s ''Naming issues'' block,
+  only reaches newly onboarded repos. ditz, dotfiles, pairmarket and website keep
+  the old text. Pairmarket is where agents misread --id as an upsert. The skip is
+  deliberate, meant not to ''repair'' a hand-edited block. Options: versioned markers
+  (<!-- ditz:onboard v2 -->) that ''ditz onboard --refresh'' replaces only when the
+  block between markers is byte-identical to a known older snippet; or just print
+  a staleness notice. Flagged by both council reviewers on PR #27 (Claude and Codex).'
+type: feature
+component: onboarding
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-13T05:24:08-00:00
+references: []
+log_events:
+- time: 2026-09-13T05:24:08-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
