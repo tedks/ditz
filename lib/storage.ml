@@ -185,6 +185,11 @@ module FS = struct
         load_issue path
       else
         Error (`Msg (Printf.sprintf "Issue %s not found" id))
+
+  let issue_file_exists dir id =
+    match issue_path dir id with
+    | Error _ as e -> e
+    | Ok path -> Ok (Sys.file_exists path)
 end
 
 (* Git backend operations *)
@@ -269,6 +274,15 @@ module GitBackend = struct
       match Git.read_file_from_branch path with
       | Ok content -> parse_yaml issue_of_yaml content path
       | Error _ -> Error (`Msg (Printf.sprintf "Issue %s not found" id))
+
+  let issue_file_exists id =
+    match validate_id id with
+    | Error _ as e -> e
+    | Ok safe_id ->
+      match Git.list_ditz_files_result () with
+      | Error (`Msg e) ->
+        Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
+      | Ok files -> Ok (List.mem (Printf.sprintf ".ditz/issue-%s.yaml" safe_id) files)
 end
 
 (* Public API - dispatches to appropriate backend *)
@@ -381,6 +395,16 @@ let find_issue_by_exact_id dir id =
   match detect_backend () with
   | GitBranch -> GitBackend.find_issue_by_exact_id id
   | Filesystem d -> FS.find_issue_by_exact_id (if dir = default_issue_dir then d else dir) id
+
+(** Is there a file for issue [id], readable or not? [find_issue_by_exact_id]
+    answers a different question -- is there a READABLE issue -- and its Error
+    covers "absent", "unparseable" and "could not read" alike. A caller about to
+    create [id] needs this one, because saving over an unreadable file silently
+    destroys it. Error means the store could not be checked; fail closed. *)
+let issue_file_exists dir id =
+  match detect_backend () with
+  | GitBranch -> GitBackend.issue_file_exists id
+  | Filesystem d -> FS.issue_file_exists (if dir = default_issue_dir then d else dir) id
 
 (** Check which backend is currently active *)
 let current_backend () = detect_backend ()

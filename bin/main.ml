@@ -124,19 +124,33 @@ let add_cmd =
          (--type) and any stdin read, so a no-op re-add never fails on a bad
          creation flag or blocks on stdin. *)
       let existing = match custom_id with
+        | None -> Ok None
         | Some id ->
           (match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
-           | Ok e -> Some e | Error _ -> None)
-        | None -> None
+           | Ok e -> Ok (Some e)
+           | Error (`Msg read_err) ->
+             (* No readable issue -- but only a truly ABSENT id may be created.
+                If issue-<id>.yaml exists and failed to load, creating would
+                save straight over it and destroy it (import refuses the same
+                case). A failed existence check is not an absence either. *)
+             (match Ditz.Storage.issue_file_exists config.issue_dir id with
+              | Ok false -> Ok None
+              | Ok true ->
+                Error (Printf.sprintf
+                  "issue %s already exists but could not be read (%s); refusing \
+                   to overwrite it. Repair the file by hand (see FORMAT.md) or \
+                   use a different --id." id read_err)
+              | Error (`Msg e) -> Error e))
       in
       match existing with
-      | Some existing ->
+      | Error e -> Fmt.epr "Error: %s@." e; 1
+      | Ok (Some existing) ->
         (match mode with
          | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
          | Quiet -> Fmt.pr "%s@." existing.id
          | Human -> Fmt.pr "Issue %s already exists@." existing.id);
         0
-      | None ->
+      | Ok None ->
         (* Creating: now resolve description and validate creation-only fields. *)
         let desc = match (desc, desc_stdin) with
           | (Some d, false) -> d

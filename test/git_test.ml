@@ -498,6 +498,24 @@ let test_storage_git_backend () =
   );
   Printf.printf "PASS: storage_git_backend\n"
 
+(* issue_file_exists is what stops `add --id` saving over an issue it could not
+   read, so on the git backend it must see a committed-but-unparseable file as
+   present, where find_issue_by_exact_id only reports an error. *)
+let test_issue_file_exists_git_backend () =
+  with_temp_git_repo (fun _ ->
+    let () = assert_ok (Storage.init_project ~name:"ExistsTest" ~issue_dir:".ditz") in
+    assert (Storage.is_git_backend ());
+    assert (assert_ok (Storage.issue_file_exists ".ditz" "nope") = false);
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-broken.yaml"
+                          ~content:"id: broken\ntitle: [unclosed\n"
+                          ~commit_msg:"test: unparseable issue") in
+    assert_error (Storage.find_issue_by_exact_id ".ditz" "broken");
+    assert (assert_ok (Storage.issue_file_exists ".ditz" "broken") = true);
+    (* an invalid id is an error, never a quiet "absent" *)
+    assert_error (Storage.issue_file_exists ".ditz" "has.dot")
+  );
+  Printf.printf "PASS: issue_file_exists_git_backend\n"
+
 let test_write_does_not_follow_symlink () =
   with_temp_git_repo (fun temp_dir ->
     let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
@@ -806,4 +824,5 @@ let () =
   test_submodule_refused ();
   test_submodule_no_false_positive ();
   test_storage_git_backend ();
+  test_issue_file_exists_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"
