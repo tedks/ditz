@@ -512,7 +512,15 @@ let test_issue_file_exists_git_backend () =
     assert_error (Storage.find_issue_by_exact_id ".ditz" "broken");
     assert (assert_ok (Storage.issue_file_exists ".ditz" "broken") = true);
     (* an invalid id is an error, never a quiet "absent" *)
-    assert_error (Storage.issue_file_exists ".ditz" "has.dot")
+    assert_error (Storage.issue_file_exists ".ditz" "has.dot");
+    (* a file in the metadata worktree that was never committed (hand edit, or
+       a write whose commit failed) is invisible to the branch -- but it is the
+       very file a save would replace, so it counts as present *)
+    let () = assert_ok (Git.with_worktree (fun wt ->
+      Fs_util.write_file_atomic ~path:(Filename.concat wt ".ditz/issue-hand.yaml")
+        ~content:"id: hand\ntitle: uncommitted\n")) in
+    assert_error (Storage.find_issue_by_exact_id ".ditz" "hand");
+    assert (assert_ok (Storage.issue_file_exists ".ditz" "hand") = true)
   );
   Printf.printf "PASS: issue_file_exists_git_backend\n"
 

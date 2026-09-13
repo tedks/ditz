@@ -189,7 +189,7 @@ module FS = struct
   let issue_file_exists dir id =
     match issue_path dir id with
     | Error _ as e -> e
-    | Ok path -> Ok (Sys.file_exists path)
+    | Ok path -> Fs_util.entry_exists path
 end
 
 (* Git backend operations *)
@@ -273,16 +273,25 @@ module GitBackend = struct
       let path = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
       match Git.read_file_from_branch path with
       | Ok content -> parse_yaml issue_of_yaml content path
-      | Error _ -> Error (`Msg (Printf.sprintf "Issue %s not found" id))
+      | Error _ ->
+        Error (`Msg (Printf.sprintf "Issue %s not found on the ditz-metadata branch" id))
 
   let issue_file_exists id =
     match validate_id id with
     | Error _ as e -> e
     | Ok safe_id ->
+      let rel = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
       match Git.list_ditz_files_result () with
       | Error (`Msg e) ->
         Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
-      | Ok files -> Ok (List.mem (Printf.sprintf ".ditz/issue-%s.yaml" safe_id) files)
+      | Ok files when List.mem rel files -> Ok true
+      | Ok _ ->
+        (* Not committed -- but a save lands in the metadata worktree, not the
+           branch, and the worktree can hold a file the branch doesn't: a hand
+           edit, a write whose commit failed, or (case-insensitive filesystem)
+           a committed file differing only in case. Check the entry the save
+           would actually replace. *)
+        Git.with_worktree (fun wt -> Fs_util.entry_exists (Filename.concat wt rel))
 end
 
 (* Public API - dispatches to appropriate backend *)
@@ -400,7 +409,11 @@ let find_issue_by_exact_id dir id =
     answers a different question -- is there a READABLE issue -- and its Error
     covers "absent", "unparseable" and "could not read" alike. A caller about to
     create [id] needs this one, because saving over an unreadable file silently
-    destroys it. Error means the store could not be checked; fail closed. *)
+    destroys it. It checks the entry a save would replace ([lstat], so dangling
+    symlinks and case-only collisions count), and on the git backend also the
+    committed branch. It is a check, not a lock: a concurrent create of the
+    same id between this and the save is not prevented. Error means the store
+    could not be checked; fail closed. *)
 let issue_file_exists dir id =
   match detect_backend () with
   | GitBranch -> GitBackend.issue_file_exists id

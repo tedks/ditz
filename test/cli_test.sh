@@ -366,6 +366,12 @@ if [ -z "$out" ]; then echo "ok: --ids-only refusal prints nothing to stdout"
 else echo "FAIL: --ids-only refusal printed: $out"; fail=1; fi
 # an absent id still creates normally right next to it
 "$BIN" add "Fresh" --id keep2 --ids-only >/dev/null; check "absent --id still creates" 0 "$?"
+# A dangling symlink is still an entry the save's rename would replace; stat
+# says "absent", so occupancy must be decided with lstat.
+ln -s "$work/does-not-exist" .ditz/issue-dangle.yaml
+out="$("$BIN" add "Dangle" --id dangle 2>&1)"; check "add --id over a dangling symlink refused" 1 "$?"
+if [ -L .ditz/issue-dangle.yaml ]; then echo "ok: dangling symlink left in place"
+else echo "FAIL: add --id replaced a dangling symlink"; fail=1; fi
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

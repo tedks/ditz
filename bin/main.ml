@@ -136,10 +136,19 @@ let add_cmd =
              (match Ditz.Storage.issue_file_exists config.issue_dir id with
               | Ok false -> Ok None
               | Ok true ->
+                (* The remedy differs by backend: on the git backend reads come
+                   from the committed branch, so a repair only counts once it
+                   is committed. *)
+                let remedy =
+                  if Ditz.Storage.is_git_backend () then
+                    Printf.sprintf "Repair or remove .ditz/issue-%s.yaml in the \
+                      .ditz-worktree checkout and commit that on ditz-metadata" id
+                  else Printf.sprintf "Repair or remove .ditz/issue-%s.yaml" id
+                in
                 Error (Printf.sprintf
-                  "issue %s already exists but could not be read (%s); refusing \
-                   to overwrite it. Repair the file by hand (see FORMAT.md) or \
-                   use a different --id." id read_err)
+                  "a file for issue %s already exists but does not load as an \
+                   issue (%s); refusing to overwrite it. %s, or use a different \
+                   --id." id read_err remedy)
               | Error (`Msg e) -> Error e))
       in
       match existing with
