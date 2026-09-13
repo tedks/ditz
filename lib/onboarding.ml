@@ -25,11 +25,12 @@ Create / inspect:
 - `--json` on any command for machine output; `--ids-only` for just ids
 
 Naming issues: there is no separate name field — `--id` IS the name.
-- `ditz add "title" --id <name>` makes `<name>` the permanent id (letters,
-  digits, `-`, `_`); without `--id` you get a SHA1. Any unique prefix of an id
-  works on the CLI, and an exact id always wins.
+- `ditz add "title" --id <name>` makes `<name>` the permanent id (ASCII
+  letters, digits, `-`, `_`); without `--id` you get a SHA1. Commands that take
+  an id accept any unique prefix, and an exact id always wins.
 - Re-running `add --id <name>` for an existing issue changes NOTHING (safe to
-  retry, but not an update). Edit with `ditz set <id> --title/--desc/-t/-c`.
+  retry, but not an update). Edit with e.g. `ditz set <id> --title "..."`
+  (also `--desc`, `-t`, `-c`).
 
 Structure (there are no priority / epic / parent fields — urgency is derived,
 hierarchy is expressed in the graph):

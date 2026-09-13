@@ -63,14 +63,20 @@ help="$("$BIN" add --help=plain 2>&1 | tr -s '[:space:]' ' ')"
 contains "add --help: --id is the name" "there is no separate name field" "$help"
 contains "add --help: re-add is not an update" "idempotent, not an update" "$help"
 contains "add --help: names ditz set" "ditz set NAME" "$help"
-out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" 2>&1)"; rc=$?
+snapshot="$("$BIN" show idem1 --json)"
+out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" -t bugfix -c other 2>&1)"; rc=$?
 check "human re-add succeeds" 0 "$rc"
 contains "re-add says nothing changed" "already exists; nothing changed" "$out"
 contains "re-add names the remedy" "ditz set idem1" "$out"
-contains "re-add left title unchanged" '"title":"First"' "$("$BIN" show idem1 --json)"
+# JSON mode carries no hint: exactly the existing issue's summary object.
+out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" -t bugfix -c other --json 2>/dev/null)"
+check "json re-add prints exactly the existing issue" \
+  '{"id":"idem1","title":"First","status":"unstarted"}' "$out"
+# Neither re-add changed anything: the whole issue is byte-identical.
+check "re-adds left the whole issue unchanged" "$snapshot" "$("$BIN" show idem1 --json)"
 before="$("$BIN" list --ids-only | wc -l | tr -d ' ')"
 out="$("$BIN" add "Dotted" --id "has.dot" 2>&1)"; check "add --id with a dot rejected" 1 "$?"
-contains "invalid id names the allowed characters" "letters, digits, '-' and '_'" "$out"
+contains "invalid id names the allowed characters" "ASCII letters, digits, '-' and '_'" "$out"
 after="$("$BIN" list --ids-only | wc -l | tr -d ' ')"
 check "invalid --id created nothing" "$before" "$after"
 

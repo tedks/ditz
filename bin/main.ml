@@ -112,16 +112,19 @@ let add_cmd =
      where an agent looks once it is unsure. *)
   let man = [
     `S Manpage.s_description;
-    `P "Creates an issue and prints its id. Every other command refers to the \
-        issue by that id, or by any unique prefix of it.";
+    `P "Creates an issue and prints its id. Commands that take an issue id \
+        accept that id or any unique prefix of it ($(b,add --id) itself matches \
+        exactly).";
     `P "Without $(b,--id) the id is a 40-character SHA1. With $(b,--id) NAME, \
         NAME is the id: the issue's one and only name (there is no separate \
         name field). It is permanent, it becomes the file name \
-        (issue-NAME.yaml), and it may contain only letters, digits, '-' and '_'.";
+        (issue-NAME.yaml), and it may contain only ASCII letters, digits, '-' and \
+        '_'.";
     `P "$(b,--id) makes add idempotent, not an update: if NAME already exists, \
         add changes nothing and exits 0, ignoring the title, description, type \
         and component given. To change an existing issue use \
-        $(b,ditz set) NAME.";
+        $(b,ditz set) NAME. (If issue-NAME.yaml exists but cannot be read, add \
+        refuses with an error rather than overwrite it.)";
     `S Manpage.s_examples;
     `Pre "ditz add \"Login fails on Firefox\" -t bugfix -c auth --desc \"Repro: ...\"\n\
           ditz add \"Login fails on Firefox\" --id login-firefox -t bugfix\n\
@@ -130,7 +133,7 @@ let add_cmd =
   ] in
   let info = Cmd.info "add" ~doc ~man in
   let title_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TITLE") in
-  let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"NAME" ~doc:"Name the issue: use NAME as its permanent id instead of a SHA1 (letters, digits, '-', '_'). If NAME already exists, nothing is changed; use $(b,ditz set) to edit it.") in
+  let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"NAME" ~doc:"Name the issue: use NAME as its permanent id instead of a SHA1 (ASCII letters, digits, '-', '_'). If NAME already exists, nothing is changed; use $(b,ditz set) to edit it.") in
   let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Issue type (bugfix, feature, task; default task)") in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
