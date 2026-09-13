@@ -68,11 +68,14 @@ out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" -t bugfix -c othe
 check "human re-add succeeds" 0 "$rc"
 contains "re-add says nothing changed" "already exists; nothing changed" "$out"
 contains "re-add names the remedy" "ditz set idem1" "$out"
-# JSON mode carries no hint: exactly the existing issue's summary object.
-out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" -t bugfix -c other --json 2>/dev/null)"
-check "json re-add prints exactly the existing issue" \
-  '{"id":"idem1","title":"First","status":"unstarted"}' "$out"
-# Neither re-add changed anything: the whole issue is byte-identical.
+# JSON mode carries no hint: exit 0 and exactly the existing issue's summary.
+out="$("$BIN" add "Renamed title" --id idem1 --desc "new desc" -t bugfix -c other --json 2>/dev/null)"; rc=$?
+check "json re-add succeeds" 0 "$rc"
+if [ "$out" = '{"id":"idem1","title":"First","status":"unstarted"}' ]; then
+  echo "ok: json re-add prints exactly the existing issue"
+else echo "FAIL: json re-add output: $out"; fail=1; fi
+# Neither re-add changed anything: every stored field, as show --json renders
+# them, is identical.
 check "re-adds left the whole issue unchanged" "$snapshot" "$("$BIN" show idem1 --json)"
 before="$("$BIN" list --ids-only | wc -l | tr -d ' ')"
 out="$("$BIN" add "Dotted" --id "has.dot" 2>&1)"; check "add --id with a dot rejected" 1 "$?"

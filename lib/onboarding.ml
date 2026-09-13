@@ -26,8 +26,9 @@ Create / inspect:
 
 Naming issues: there is no separate name field — `--id` IS the name.
 - `ditz add "title" --id <name>` makes `<name>` the permanent id (ASCII
-  letters, digits, `-`, `_`); without `--id` you get a SHA1. Commands that take
-  an id accept any unique prefix, and an exact id always wins.
+  letters, digits, `-`, `_`); without `--id` you get a SHA1. Other commands
+  that take an id accept any unique prefix (an exact id always wins);
+  `add --id` itself matches exactly.
 - Re-running `add --id <name>` for an existing issue changes NOTHING (safe to
   retry, but not an update). Edit with e.g. `ditz set <id> --title "..."`
   (also `--desc`, `-t`, `-c`).
