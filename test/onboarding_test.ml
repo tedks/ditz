@@ -27,6 +27,12 @@ let () =
   assert (Onboarding.contains c "ditz ready");
   print_endline "PASS: writes block to fresh file";
 
+  (* the snippet teaches that --id is the name and that a re-add never updates *)
+  assert (Onboarding.contains Onboarding.snippet "`--id` IS the name");
+  assert (Onboarding.contains Onboarding.snippet "changes NOTHING");
+  assert (Onboarding.contains Onboarding.snippet "ditz set <id>");
+  print_endline "PASS: snippet documents --id naming and idempotency";
+
   (* idempotent: second install is a no-op (markers already present) *)
   assert (is_skipped (Onboarding.install ~within:None ~path:agents));
   let c2 = read agents in
