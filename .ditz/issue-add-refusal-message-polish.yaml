@@ -1,0 +1,23 @@
+id: add-refusal-message-polish
+title: 'add refusal message: name the real worktree path, tighten wording'
+desc: 'Nits from council round 2 on PR #28, not blocking: (1) the git-backend remedy
+  always says ''in the .ditz-worktree checkout'', which is wrong in DITZ_EPHEMERAL_WORKTREE=1
+  mode, when the metadata worktree lives elsewhere, and names the wrong file after
+  a case-only collision; print the actual path. (2) The combined message can read
+  self-contradictory (''already exists ... (Issue X not found)''). (3) In ephemeral
+  mode a new --id sets up two temp worktrees, one for the check and one for the save
+  (perf only). (4) The check can create .ditz-worktree even when add then fails validation
+  (harmless; any successful write creates it).'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
