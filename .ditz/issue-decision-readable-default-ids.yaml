@@ -1,0 +1,25 @@
+id: decision-readable-default-ids
+title: 'DECISION NEEDED: readable default ids and/or a rename command'
+desc: 'Operator decision needed before implementation. Evidence: goals (09-10) operator
+  asked ''why am I seeing git hashes for these? I thought ditz had more human-readable
+  names?''; m5 dropped and recreated an issue after ''learned the hard way that ditz
+  add defaults to a full hash id''; an add+drop ''rename'' in goals; 40-char hashes
+  leaked into human status reports 6x; a code comment cited the wrong issue via a
+  hash prefix. 90% of swarm-ide adds already pass --id, and there is no rename. Options:
+  (a) derive a slug from the title when --id is absent (collision suffix; not idempotent);
+  (b) warn when --id is absent; (c) a ''rename'' command that rewrites blocks/blocked_by
+  edges. PLAN.md cut prefixed/sequential ids; slug-from-title was not discussed. This
+  is likely what the ''name param'' request was really about.'
+type: feature
+component: ids
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
