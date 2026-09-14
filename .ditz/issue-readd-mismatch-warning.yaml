@@ -1,0 +1,21 @@
+id: readd-mismatch-warning
+title: add --id re-add silently ignores a different title/desc/type/component
+desc: 'PR #27 documents that ''add --id X'' on an existing X changes nothing. Agents
+  still use re-add as ''ensure it exists'' (about 70 ROOT->child handoffs in swarm-ide),
+  and 2 real cases silently discarded new content: 7 rewritten titles/descs in pairmarket
+  (06-27), 1 child title in swarm-ide. Fix: when fields given on a re-add differ from
+  the stored issue, warn on stderr in every output mode (stdout and exit code unchanged)
+  and point at ''ditz set''.'
+type: feature
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
