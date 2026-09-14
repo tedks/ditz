@@ -1,0 +1,21 @@
+id: docs-pairmarket-ruby-agents-md
+title: pairmarket AGENTS.md still describes Ruby ditz
+desc: 'pairmarket''s AGENTS.md has a hand-written section for Ruby ditz: in-tree bugs/,
+  ''ditz todo'', ''nix run ~/Projects/ditz/master#ditz''. The onboarding block below
+  it describes the ditz-metadata branch. Result: 18 wrong-binary failures (''ruby:
+  No such file'', guessed target/debug/ditz), Ruby-only flags like ''comment -m''
+  and ''add --no-edit'', and 3 audit prompts told to ''look for ditz issue dir (bugs/)''.
+  Fix: delete the Ruby-era section in pairmarket.'
+type: task
+component: adoption
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
