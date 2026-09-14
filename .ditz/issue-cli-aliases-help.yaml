@@ -1,0 +1,21 @@
+id: cli-aliases-help
+title: 'CLI guesses agents make: --description, ''ditz help <cmd>'', -t as title'
+desc: 'Failed calls agents retry: ''--description'' on add (11: 9 Codex, 2 Claude);
+  ''ditz help'' or ''ditz help <cmd>'' as a subcommand (about 19); ''-t'' used as
+  the title (4), where cmdliner suggests ''-t'' for ''--title'' although -t is --type;
+  ''create'' (2). Fix: accept --description as an alias of --desc on add and set;
+  add a ''help [CMD]'' subcommand that prints that command''s help; consider accepting
+  --title on add.'
+type: feature
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
