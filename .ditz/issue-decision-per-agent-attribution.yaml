@@ -1,0 +1,22 @@
+id: decision-per-agent-attribution
+title: 'DECISION NEEDED: per-agent attribution'
+desc: 'Operator decision needed. Every observed log entry (1,369 in swarm-ide, 210
+  in pairmarket) is ''Ted Smith'', across concurrent agents. 404 of 854 comment/close
+  texts carry hand-written agent labels; swarm-ide built a separate session Work Log.
+  DITZ_USER/DITZ_EMAIL are silently ignored whenever ~/.ditz-config exists (framework0
+  has one). That config held ''Test User'' until 07-19 and misattributed issues. Nobody
+  complained directly, so evidence is indirect. Options: env vars override the config
+  file; a global --as NAME; an optional agent/session field on log events.'
+type: feature
+component: identity
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
