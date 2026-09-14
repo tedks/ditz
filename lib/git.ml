@@ -388,16 +388,19 @@ let write_to_branch ~path ~content ~commit_msg =
     | Error e -> Error e
     | Ok () ->
 
-    (* Add and commit *)
-    match git ~cwd:worktree_path ["add"; path] with
+    (* Add and commit THIS path only. The worktree is shared by every ditz
+       process, and anything else left staged in it (a write whose commit
+       failed, a concurrent writer's `git add`) must not be swept into this
+       commit under this commit's message. Both the has-changes check and the
+       commit are limited to [path]; `commit -- <path>` commits that path's
+       state and leaves any other staged change staged. *)
+    match git ~cwd:worktree_path ["add"; "--"; path] with
     | Error e -> Error e
     | Ok _ ->
-      (* Check if there are changes to commit *)
-      match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"] with
-      | Ok _ -> Ok () (* No changes staged, nothing to commit *)
+      match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"; "--"; path] with
+      | Ok _ -> Ok () (* this path is unchanged: nothing to commit *)
       | Error _ ->
-        (* There are staged changes, commit them *)
-        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
         | Error e -> Error e
         | Ok _ -> Ok ()
   )
@@ -408,10 +411,11 @@ let delete_from_branch ~path ~commit_msg =
     let full_path = Filename.concat worktree_path path in
     if Sys.file_exists full_path then begin
       Sys.remove full_path;
-      match git ~cwd:worktree_path ["add"; path] with
+      match git ~cwd:worktree_path ["add"; "--"; path] with
       | Error e -> Error e
       | Ok _ ->
-        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
+        (* Commit only this deletion; see write_to_branch. *)
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
         | Error e -> Error e
         | Ok _ -> Ok ()
     end else

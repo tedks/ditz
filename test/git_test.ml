@@ -160,6 +160,39 @@ let test_write_to_branch () =
   );
   Printf.printf "PASS: write_to_branch\n"
 
+(* A write commits exactly its own file. Anything else staged in the shared
+   worktree (a failed write's leftovers, another process's `git add`) must stay
+   out of the commit -- it used to be swept in under the unrelated commit's
+   message, which is how stray test issues reached a real tracker. *)
+let test_write_commits_only_its_path () =
+  with_temp_git_repo (fun _ ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"OwnPath") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-first.yaml"
+                          ~content:"id: first\n" ~commit_msg:"first") in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    (* stage a stray file in the worktree, as a failed write would leave it *)
+    let stray = Filename.concat wt ".ditz/issue-stray.yaml" in
+    let () = assert_ok (Fs_util.write_file_atomic ~path:stray ~content:"id: stray\n") in
+    run_in ~cwd:wt "git add .ditz/issue-stray.yaml";
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-second.yaml"
+                          ~content:"id: second\n" ~commit_msg:"second") in
+    let head_files = assert_ok (Git.git ["show"; "--name-only"; "--format="; "ditz-metadata"]) in
+    assert (String.trim head_files = ".ditz/issue-second.yaml");
+    assert_error (Git.read_file_from_branch ".ditz/issue-stray.yaml");
+    (* rewriting an unchanged file is a no-op even with the stray still staged *)
+    let before = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-second.yaml"
+                          ~content:"id: second\n" ~commit_msg:"again") in
+    assert (assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) = before);
+    (* deletes are scoped the same way *)
+    let () = assert_ok (Git.delete_from_branch ~path:".ditz/issue-first.yaml"
+                          ~commit_msg:"delete first") in
+    let del_files = assert_ok (Git.git ["show"; "--name-only"; "--format="; "ditz-metadata"]) in
+    assert (String.trim del_files = ".ditz/issue-first.yaml");
+    assert_error (Git.read_file_from_branch ".ditz/issue-stray.yaml")
+  );
+  Printf.printf "PASS: write_commits_only_its_path\n"
+
 let test_delete_from_branch () =
   with_temp_git_repo (fun _ ->
     let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"TestProject") in
@@ -785,6 +818,7 @@ let () =
   test_list_ditz_files ();
   test_write_to_branch ();
   test_delete_from_branch ();
+  test_write_commits_only_its_path ();
   test_persistent_worktree ();
   test_ephemeral_worktree ();
   test_find_common_root ();
