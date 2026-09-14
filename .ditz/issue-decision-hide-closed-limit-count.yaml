@@ -1,0 +1,21 @@
+id: decision-hide-closed-limit-count
+title: 'DECISION NEEDED: hide closed by default, --limit, count'
+desc: 'Operator decision needed. --limit and count were approved 2026-06-14 (PLAN
+  7.5) and never built. Evidence: ready output median 4.2 KB, up to 31 KB; list --json
+  up to about 10k tokens; 38+115+22 head/tail pipes used as a limit; 14 wc -l counts;
+  swarm-ide''s reader hit TASK_LIMIT_EXCEEDED at 263 issues / 494 KB; operator: ''we
+  are not hiding closed tasks''. Open question: should list hide closed issues by
+  default (with --all), or keep showing everything and add -s open (see list-filter-validation)?'
+type: feature
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
