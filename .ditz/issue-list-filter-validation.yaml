@@ -1,0 +1,22 @@
+id: list-filter-validation
+title: 'list: unknown -s/-t values silently return everything; add -s open'
+desc: 'list warns on stderr and returns ALL issues (closed included) with exit 0 when
+  -s/-t has an unknown value. Real cases: ''list --status open'' 4x in swarm-ide Codex
+  sessions; ''list --status unstarted,in_progress,paused'' on framework0, where the
+  warning was cut off by tail -5 and the agent reported ''Ditz is confirmed working''.
+  Fix: an unknown value is an error (exit 1, names the valid values); add ''open''
+  (= not closed); accept comma-separated statuses. Evidence: usage review of agent
+  logs, 2026-09-13.'
+type: bugfix
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:29-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:29-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
