@@ -1,0 +1,20 @@
+id: docs-nix-run-instructions
+title: Docs tell agents to run ditz via nix run github:tedks/ditz
+desc: 'dotfiles CLAUDE.md/AGENTS.md (line 8) and the initialize-repo skill templates
+  say ''nix run github:tedks/ditz -- <cmd>''. That caused 49 slow invocations with
+  90-200s timeouts in 4 dotfiles sessions on framework0, even after the agent confirmed
+  ditz was on PATH. Fix in dotfiles and the skill templates: call ''ditz'' from PATH,
+  and say how to install it (INSTALL.md).'
+type: task
+component: adoption
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
