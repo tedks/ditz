@@ -1,0 +1,20 @@
+id: docs-bd-instructions-unmigrated
+title: Unmigrated repos still instruct agents to use bd
+desc: website, predictionbook and goals AGENTS.md still give bd commands on tower0
+  (website's includes the wrong syntax 'bd create -t "subject"'). Agents in 3 sessions
+  were unsure which tracker a repo uses. goals is on ditz on framework0, so check
+  each host's checkout before editing. dotfiles branches dotfiles-local-drift and
+  tighten-pushguard also still carry beads docs.
+type: task
+component: adoption
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
