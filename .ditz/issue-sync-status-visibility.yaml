@@ -1,0 +1,22 @@
+id: sync-status-visibility
+title: sync/status don't say what happened or whether the tracker is behind origin
+desc: 'sync prints only ''Synced ditz-metadata'' (564x in swarm-ide). Agents verify
+  with raw git instead: about 170 calls such as ''git rev-parse ditz-metadata origin/ditz-metadata''
+  or ''git log origin/ditz-metadata..ditz-metadata'', across about 60 sessions on
+  both hosts. Trackers drift unnoticed: pairmarket 7 behind, ditz 5 unpushed, website
+  never pushed, and a health-check alert sat in 2 unpushed commits. Fix: sync reports
+  commits pulled/pushed and the resulting SHA (text and --json); status shows local
+  vs origin ahead/behind (from the last fetch, no network).'
+type: feature
+component: sync
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:30-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:30-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
