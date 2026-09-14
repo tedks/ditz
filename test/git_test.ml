@@ -498,31 +498,38 @@ let test_storage_git_backend () =
   );
   Printf.printf "PASS: storage_git_backend\n"
 
-(* issue_file_exists is what stops `add --id` saving over an issue it could not
+(* issue_file_occupant is what stops `add --id` saving over an issue it could not
    read, so on the git backend it must see a committed-but-unparseable file as
    present, where find_issue_by_exact_id only reports an error. *)
-let test_issue_file_exists_git_backend () =
+let test_issue_file_occupant_git_backend () =
   with_temp_git_repo (fun _ ->
     let () = assert_ok (Storage.init_project ~name:"ExistsTest" ~issue_dir:".ditz") in
     assert (Storage.is_git_backend ());
-    assert (assert_ok (Storage.issue_file_exists ".ditz" "nope") = false);
+    let occ id = assert_ok (Storage.issue_file_occupant ".ditz" id) in
+    let wt_dir = Filename.concat (Sys.getcwd ()) ".ditz-worktree" in
+    (* a check must not create the metadata worktree as a side effect *)
+    assert (occ "nope" = None);
+    assert (not (Sys.file_exists wt_dir));
     let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-broken.yaml"
                           ~content:"id: broken\ntitle: [unclosed\n"
                           ~commit_msg:"test: unparseable issue") in
     assert_error (Storage.find_issue_by_exact_id ".ditz" "broken");
-    assert (assert_ok (Storage.issue_file_exists ".ditz" "broken") = true);
+    assert (occ "broken" = Some (Storage.Committed ".ditz/issue-broken.yaml"));
     (* an invalid id is an error, never a quiet "absent" *)
-    assert_error (Storage.issue_file_exists ".ditz" "has.dot");
+    assert_error (Storage.issue_file_occupant ".ditz" "has.dot");
     (* a file in the metadata worktree that was never committed (hand edit, or
        a write whose commit failed) is invisible to the branch -- but it is the
        very file a save would replace, so it counts as present *)
-    let () = assert_ok (Git.with_worktree (fun wt ->
-      Fs_util.write_file_atomic ~path:(Filename.concat wt ".ditz/issue-hand.yaml")
-        ~content:"id: hand\ntitle: uncommitted\n")) in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    let hand = Filename.concat wt ".ditz/issue-hand.yaml" in
+    let () = assert_ok (Fs_util.write_file_atomic ~path:hand
+                          ~content:"id: hand\ntitle: uncommitted\n") in
     assert_error (Storage.find_issue_by_exact_id ".ditz" "hand");
-    assert (assert_ok (Storage.issue_file_exists ".ditz" "hand") = true)
+    (match occ "hand" with
+     | Some (Storage.Uncommitted p) -> assert (Unix.realpath p = Unix.realpath hand)
+     | _ -> failwith "expected an Uncommitted occupant for issue-hand.yaml")
   );
-  Printf.printf "PASS: issue_file_exists_git_backend\n"
+  Printf.printf "PASS: issue_file_occupant_git_backend\n"
 
 let test_write_does_not_follow_symlink () =
   with_temp_git_repo (fun temp_dir ->
@@ -832,5 +839,5 @@ let () =
   test_submodule_refused ();
   test_submodule_no_false_positive ();
   test_storage_git_backend ();
-  test_issue_file_exists_git_backend ();
+  test_issue_file_occupant_git_backend ();
   Printf.printf "\nAll git integration tests passed!\n"

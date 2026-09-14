@@ -133,22 +133,29 @@ let add_cmd =
                 If issue-<id>.yaml exists and failed to load, creating would
                 save straight over it and destroy it (import refuses the same
                 case). A failed existence check is not an absence either. *)
-             (match Ditz.Storage.issue_file_exists config.issue_dir id with
-              | Ok false -> Ok None
-              | Ok true ->
-                (* The remedy differs by backend: on the git backend reads come
-                   from the committed branch, so a repair only counts once it
-                   is committed. *)
-                let remedy =
-                  if Ditz.Storage.is_git_backend () then
-                    Printf.sprintf "Repair or remove .ditz/issue-%s.yaml in the \
-                      .ditz-worktree checkout and commit that on ditz-metadata" id
-                  else Printf.sprintf "Repair or remove .ditz/issue-%s.yaml" id
-                in
-                Error (Printf.sprintf
-                  "a file for issue %s already exists but does not load as an \
-                   issue (%s); refusing to overwrite it. %s, or use a different \
-                   --id." id read_err remedy)
+             (match Ditz.Storage.issue_file_occupant config.issue_dir id with
+              | Ok None -> Ok None
+              | Ok (Some occupant) ->
+                (* Say where the file is, and a remedy that works for that
+                   place: reads on the git backend come from the branch, so a
+                   committed file is only repaired by a commit, while an
+                   uncommitted one just needs committing or deleting. *)
+                Error (match occupant with
+                  | Ditz.Storage.On_disk path ->
+                    Printf.sprintf "%s already exists but does not load as an \
+                      issue (%s); refusing to overwrite it. Repair or remove %s, \
+                      or use a different --id." path read_err path
+                  | Committed path ->
+                    Printf.sprintf "%s already exists on the ditz-metadata \
+                      branch but does not load as an issue (%s); refusing to \
+                      overwrite it. Repair or remove it in a checkout of \
+                      ditz-metadata and commit that, or use a different --id."
+                      path read_err
+                  | Uncommitted path ->
+                    Printf.sprintf "%s already exists in the ditz metadata \
+                      worktree but is not committed; refusing to overwrite it. \
+                      Commit it if it is wanted or delete it if not, or use a \
+                      different --id." path)
               | Error (`Msg e) -> Error e))
       in
       match existing with
