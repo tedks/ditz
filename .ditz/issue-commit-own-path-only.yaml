@@ -1,0 +1,21 @@
+id: commit-own-path-only
+title: write_to_branch commits everything staged, not just the issue it wrote
+desc: 'Git.write_to_branch and delete_from_branch run ''git add <path>'' and then
+  ''git commit -m'' with no pathspec. Anything left staged in .ditz-worktree, for
+  example by a write whose commit failed, is swept into the next unrelated commit
+  under that commit''s message. The test issues qa/qb landed this way in fc2ca40.
+  Fix: commit with ''-- <path>'' (git commit --only semantics) so a write commits
+  exactly its own file. This is the cheap first slice of write-lock-recheck.'
+type: bugfix
+component: storage
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-14T23:48:29-00:00
+references: []
+log_events:
+- time: 2026-09-14T23:48:29-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
