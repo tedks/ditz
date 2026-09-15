@@ -526,8 +526,16 @@ let test_issue_file_occupant_git_backend () =
                           ~content:"id: hand\ntitle: uncommitted\n") in
     assert_error (Storage.find_issue_by_exact_id ".ditz" "hand");
     (match occ "hand" with
-     | Some (Storage.Uncommitted p) -> assert (Unix.realpath p = Unix.realpath hand)
-     | _ -> failwith "expected an Uncommitted occupant for issue-hand.yaml")
+     | Some (Storage.Uncommitted { path; staged; _ }) ->
+       assert (Unix.realpath path = Unix.realpath hand);
+       assert (not staged)
+     | _ -> failwith "expected an Uncommitted occupant for issue-hand.yaml");
+    (* staged but uncommitted (what a write whose commit failed leaves) is
+       reported as staged, since deleting the file alone would not remove it *)
+    run_in ~cwd:wt "git add -- .ditz/issue-hand.yaml";
+    (match occ "hand" with
+     | Some (Storage.Uncommitted { staged; _ }) -> assert staged
+     | _ -> failwith "expected a staged Uncommitted occupant")
   );
   Printf.printf "PASS: issue_file_occupant_git_backend\n"
 

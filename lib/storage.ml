@@ -14,8 +14,11 @@ let default_issue_dir = ".ditz"
 type occupant =
   | On_disk of string       (** filesystem backend: the file's path *)
   | Committed of string     (** git backend: path on the ditz-metadata branch *)
-  | Uncommitted of string   (** git backend: an entry in the metadata worktree
-                                that is not on the branch; absolute path *)
+  | Uncommitted of { path : string; rel : string; worktree : string; staged : bool }
+      (** git backend: an entry in the metadata worktree that is not on the
+          branch. [staged]: it is in the worktree's index (typically a write
+          whose commit failed), so deleting the file alone would still leave
+          it to be committed. *)
 
 let config_file () =
   match Sys.getenv_opt "HOME" with
@@ -314,8 +317,14 @@ module GitBackend = struct
           | None -> Error (`Msg "Not in a git repository")
           | Some wt ->
             let full = Filename.concat wt rel in
-            Result.map (fun present -> if present then Some (Uncommitted full) else None)
-              (Fs_util.entry_exists full)
+            (match Fs_util.entry_exists full with
+             | Error _ as e -> e
+             | Ok false -> Ok None
+             | Ok true ->
+               let staged =
+                 Result.is_ok (Git.git ~cwd:wt ["ls-files"; "--error-unmatch"; "--"; rel])
+               in
+               Ok (Some (Uncommitted { path = full; rel; worktree = wt; staged })))
 end
 
 (* Public API - dispatches to appropriate backend *)
@@ -435,7 +444,8 @@ let find_issue_by_exact_id dir id =
     create [id] needs this one, because saving over an unreadable file silently
     destroys it. It checks the entry a save would replace ([lstat], so dangling
     symlinks and case-only collisions count), and on the git backend also the
-    committed branch. It never creates anything (no worktree). It is a check,
+    committed branch. It creates no worktree (validating an existing one may
+    prune a stale registration, as every git command here does). It is a check,
     not a lock: a concurrent create of the same id between this and the save
     is not prevented. [Ok None] means absent; Error means the store could not
     be checked, so fail closed. *)

@@ -151,11 +151,24 @@ let add_cmd =
                       overwrite it. Repair or remove it in a checkout of \
                       ditz-metadata and commit that, or use a different --id."
                       path read_err
-                  | Uncommitted path ->
+                  | Uncommitted { path; rel; worktree; staged } ->
+                    (* A staged file must be unstaged too: deleted but still
+                       in the index, it would be committed by a later write. *)
+                    let keep, discard =
+                      if staged then
+                        (Printf.sprintf "git -C %s commit -m <msg> -- %s"
+                           (Filename.quote worktree) rel,
+                         Printf.sprintf "git -C %s rm -f -- %s"
+                           (Filename.quote worktree) rel)
+                      else
+                        (Printf.sprintf "git -C %s add -- %s && git -C %s commit -m <msg>"
+                           (Filename.quote worktree) rel (Filename.quote worktree),
+                         Printf.sprintf "delete %s" path)
+                    in
                     Printf.sprintf "%s already exists in the ditz metadata \
-                      worktree but is not committed; refusing to overwrite it. \
-                      Commit it if it is wanted or delete it if not, or use a \
-                      different --id." path)
+                      worktree but is not committed%s; refusing to overwrite it. \
+                      To keep it: %s. To discard it: %s. Or use a different --id."
+                      path (if staged then " (it is staged)" else "") keep discard)
               | Error (`Msg e) -> Error e))
       in
       match existing with

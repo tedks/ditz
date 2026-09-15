@@ -359,7 +359,8 @@ printf 'id: keep1\ntitle: [unclosed\n' > .ditz/issue-keep1.yaml
 broken="$(cat .ditz/issue-keep1.yaml)"
 out="$("$BIN" add "Clobber" --id keep1 2>&1)"; check "add --id over unreadable file refused" 1 "$?"
 contains "refusal says it will not overwrite" "refusing to overwrite" "$out"
-contains "refusal names the file and how to fix it" "Repair or remove .ditz/issue-keep1.yaml" "$out"
+contains "refusal names the file" ".ditz/issue-keep1.yaml already exists but does not load as an issue" "$out"
+contains "refusal says how to fix it" "Repair or remove .ditz/issue-keep1.yaml" "$out"
 if [ "$(cat .ditz/issue-keep1.yaml)" = "$broken" ]; then echo "ok: unreadable issue file left intact"
 else echo "FAIL: add --id rewrote an unreadable issue file"; fail=1; fi
 out="$("$BIN" add "Clobber" --id keep1 --ids-only 2>/dev/null)"; check "--ids-only refusal exits 1" 1 "$?"
