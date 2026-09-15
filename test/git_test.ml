@@ -68,6 +68,11 @@ let assert_error = function
   | Ok _ -> failwith "Expected Error, got Ok"
   | Error _ -> ()
 
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
+  go 0
+
 (* ============ Tests ============ *)
 
 let test_is_git_repo () =
@@ -229,6 +234,39 @@ let test_failed_write_rolls_back () =
     assert (index_clean ());
     assert (Sys.file_exists (Filename.concat wt ".ditz/issue-a.yaml"));
     assert (head () = before);
+    (* a target with a staged hand edit AND a further unstaged one: both come
+       back exactly -- the staged version in the index, the newer one on disk *)
+    let a = Filename.concat wt ".ditz/issue-a.yaml" in
+    let put c = assert_ok (Fs_util.write_file_atomic ~path:a ~content:c) in
+    put "id: a\ntitle: staged\n";
+    run_in ~cwd:wt "git add -- .ditz/issue-a.yaml";
+    put "id: a\ntitle: unstaged\n";
+    assert_error (Git.write_to_branch ~path:".ditz/issue-a.yaml"
+                    ~content:"id: a\ntitle: ours\n" ~commit_msg:"a3");
+    assert (assert_ok (Git.git ~cwd:wt ["show"; ":.ditz/issue-a.yaml"]) = "id: a\ntitle: staged");
+    assert (Fs_util.read_file a = "id: a\ntitle: unstaged\n");
+    run_in ~cwd:wt "git checkout HEAD -- .ditz/issue-a.yaml";
+    (* an undo that cannot complete is reported, not swallowed: the hook makes
+       the directory read-only before failing, so the new file can't be removed *)
+    let ro_hook = Filename.concat hooks "pre-commit" in
+    let oc = open_out ro_hook in
+    output_string oc "#!/bin/sh\nchmod a-w .ditz\nexit 1\n"; close_out oc;
+    (match Git.write_to_branch ~path:".ditz/issue-c.yaml" ~content:"id: c\n" ~commit_msg:"c" with
+     | Ok () -> failwith "expected the commit to fail"
+     | Error (`Msg m) ->
+       Unix.chmod (Filename.concat wt ".ditz") 0o755;
+       if Unix.getuid () <> 0 then assert (contains m "incomplete"));
+    (try Sys.remove (Filename.concat wt ".ditz/issue-c.yaml") with Sys_error _ -> ());
+    let oc = open_out ro_hook in output_string oc "#!/bin/sh\nexit 1\n"; close_out oc;
+    (* an existing file that can't be read is refused BEFORE anything changes *)
+    if Unix.getuid () <> 0 then begin
+      Unix.chmod a 0o000;
+      (match Git.write_to_branch ~path:".ditz/issue-a.yaml" ~content:"id: a\n" ~commit_msg:"a4" with
+       | Ok () -> failwith "expected a refusal for an unreadable target"
+       | Error (`Msg m) -> assert (contains m "cannot read"));
+      Unix.chmod a 0o644;
+      assert (Fs_util.read_file a = "id: a\ntitle: before\n")
+    end;
     (* and once commits work again, writes go through *)
     run_in ~cwd:dir "git config --unset core.hooksPath";
     let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-b.yaml" ~content:"id: b\n" ~commit_msg:"b") in
@@ -506,11 +544,6 @@ let test_stale_worktree_self_heal () =
   );
   Printf.printf "PASS: stale_worktree_self_heal\n"
 
-let contains haystack needle =
-  let hl = String.length haystack and nl = String.length needle in
-  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
-  go 0
-
 let test_self_heal_spares_other_worktrees () =
   with_temp_git_repo (fun temp_dir ->
     let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
@@ -724,9 +757,19 @@ let test_sync_names_staged_leftovers () =
     run_in ~cwd:wt "git add -- .ditz/issue-stray.yaml";
     (* nothing new on origin: the leftover does not block sync *)
     let () = assert_ok (Git.sync ()) in
-    (* origin moves: now a merge is needed and the leftover is named *)
+    (* origin moves ahead: a fast-forward keeps the unrelated leftover staged *)
     Sys.chdir c1;
     write "s2";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-s2.yaml"));
+    assert (String.trim (assert_ok (Git.git ~cwd:wt ["diff"; "--cached"; "--name-only"]))
+            = ".ditz/issue-stray.yaml");
+    (* both sides move: a real merge is needed, and the leftover is named *)
+    write "local";
+    Sys.chdir c1;
+    write "s3";
     let () = assert_ok (Git.sync ()) in
     Sys.chdir c2;
     (match Git.sync () with
@@ -739,7 +782,7 @@ let test_sync_names_staged_leftovers () =
     run_in ~cwd:wt "git restore --staged -- .ditz/issue-stray.yaml";
     Sys.remove (Filename.concat wt ".ditz/issue-stray.yaml");
     let () = assert_ok (Git.sync ()) in
-    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-s2.yaml"));
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-s3.yaml"));
     cleanup ()
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_names_staged_leftovers\n"

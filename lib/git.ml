@@ -374,27 +374,84 @@ let list_ditz_files_result () =
 let list_ditz_files () =
   match list_ditz_files_result () with Ok files -> files | Error _ -> []
 
+(** What a path looked like before a write touched it: the worktree file
+    ([None] = absent) and its stage-0 index entry ([None] = not in the index).
+    Taken before any mutation so a failed write can be put back exactly. *)
+type path_snapshot = { file : string option; index : (string * string) option }
+
+(* Refuses (Error) rather than guess: an existing file we cannot read, or an
+   index entry we cannot interpret, must not be replaced by a write that might
+   then have to be undone without knowing what was there. *)
+let snapshot_path ~worktree_path ~path ~full_path =
+  let file =
+    match Unix.lstat full_path with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok None
+    | exception Unix.Unix_error (e, _, _) ->
+      Error (Printf.sprintf "cannot check %s: %s" full_path (Unix.error_message e))
+    | _ ->
+      (match Fs_util.read_file full_path with
+       | content -> Ok (Some content)
+       | exception exn ->
+         Error (Printf.sprintf "cannot read %s before changing it (%s)"
+                  full_path (Printexc.to_string exn)))
+  in
+  let index =
+    match git ~cwd:worktree_path ["ls-files"; "-s"; "--"; path] with
+    | Error (`Msg e) -> Error e
+    | Ok "" -> Ok None
+    | Ok out ->
+      (match String.split_on_char '\n' out with
+       | [ line ] ->
+         (match String.split_on_char '\t' line with
+          | meta :: _ ->
+            (match String.split_on_char ' ' (String.trim meta) with
+             | [ mode; sha; "0" ] -> Ok (Some (mode, sha))
+             | _ -> Error (Printf.sprintf "%s is unmerged in the index" path))
+          | [] -> Error (Printf.sprintf "unexpected ls-files output for %s" path))
+       | _ -> Error (Printf.sprintf "%s is unmerged in the index" path))
+  in
+  match file, index with
+  | Ok file, Ok index -> Ok { file; index }
+  | Error e, _ | _, Error e ->
+    Error (`Msg (Printf.sprintf "%s; refusing to write it (check `git -C %s status`)"
+                   e (Filename.quote worktree_path)))
+
 (** Undo a write whose git step failed, so it does not linger in the shared
     worktree. Scoped commits (commit -- <path>) no longer sweep a leftover into
     the next write's commit -- so a leftover would stay: staged, it makes every
-    later `git merge` refuse ("changes registered in the index"), blocking
-    sync; unstaged, it is an uncommitted edit nobody asked for. The command
-    already reported failure, so the right state is "as before". Best effort:
-    if the unstage itself fails (e.g. the same index.lock), say so. *)
-let rollback_path ~worktree_path ~path ~full_path ~previous ~staged err =
-  let unstage =
-    if not staged then Ok ()
-    else Result.map ignore (git ~cwd:worktree_path ["reset"; "-q"; "--"; path])
+    later `git merge` refuse, blocking sync; unstaged, it is an edit nobody
+    asked for. The command already reported failure, so the right end state is
+    exactly "as before": the index entry as snapshotted ([staged]: only if our
+    `git add` got that far) and the file as snapshotted. Any step of the undo
+    that fails is reported, not swallowed. *)
+let rollback_path ~worktree_path ~path ~full_path ~(snap : path_snapshot) ~staged err =
+  let problems = ref [] in
+  let note what = function
+    | Ok _ -> ()
+    | Error (`Msg m) -> problems := Printf.sprintf "%s: %s" what m :: !problems
   in
-  (match previous with
-   | Some old -> ignore (Fs_util.write_file_atomic ~path:full_path ~content:old)
-   | None -> (try Sys.remove full_path with Sys_error _ -> ()));
-  match err, unstage with
-  | e, Ok () -> Error e
-  | `Msg m, Error (`Msg u) ->
+  if staged then
+    note "restoring the index entry"
+      (match snap.index with
+       | Some (mode, sha) ->
+         git ~cwd:worktree_path
+           ["update-index"; "--add"; "--cacheinfo"; String.concat "," [mode; sha; path]]
+       | None ->
+         git ~cwd:worktree_path ["rm"; "--cached"; "-q"; "--ignore-unmatch"; "--"; path]);
+  note ("restoring " ^ full_path)
+    (match snap.file with
+     | Some old -> Fs_util.write_file_atomic ~path:full_path ~content:old
+     | None ->
+       (match Sys.remove full_path with
+        | () -> Ok ()
+        | exception Sys_error _ when not (Sys.file_exists full_path) -> Ok ()
+        | exception Sys_error m -> Error (`Msg m)));
+  match err, List.rev !problems with
+  | e, [] -> Error e
+  | `Msg m, ps ->
     Error (`Msg (Printf.sprintf
-      "%s (and unstaging %s failed: %s -- check `git -C %s status`)"
-      m path u (Filename.quote worktree_path)))
+      "%s (and undoing the failed write was incomplete -- %s; check `git -C %s status`)"
+      m (String.concat "; " ps) (Filename.quote worktree_path)))
 
 (** Write content to a file on ditz-metadata branch using worktree.
     The write is atomic (temp + rename) and does not follow a symlink planted
@@ -407,8 +464,10 @@ let write_to_branch ~path ~content ~commit_msg =
     let dir = Filename.dirname full_path in
     let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
     (* What was there before, so a write that fails after touching the
-       worktree can be undone (see rollback_path). *)
-    let previous = try Some (Fs_util.read_file full_path) with _ -> None in
+       worktree can be undone exactly (see rollback_path). *)
+    match snapshot_path ~worktree_path ~path ~full_path with
+    | Error e -> Error e
+    | Ok snap ->
     match Fs_util.write_file_atomic ~path:full_path ~content with
     | Error e -> Error e
     | Ok () ->
@@ -420,13 +479,13 @@ let write_to_branch ~path ~content ~commit_msg =
        commit are limited to [path]; `commit -- <path>` commits that path's
        state and leaves any other staged change staged. *)
     match git ~cwd:worktree_path ["add"; "--"; path] with
-    | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:false e
+    | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:false e
     | Ok _ ->
       match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"; "--"; path] with
       | Ok _ -> Ok () (* this path is unchanged: nothing to commit *)
       | Error _ ->
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:true e
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:true e
         | Ok _ -> Ok ()
   )
 
@@ -435,14 +494,16 @@ let delete_from_branch ~path ~commit_msg =
   with_worktree (fun worktree_path ->
     let full_path = Filename.concat worktree_path path in
     if Sys.file_exists full_path then begin
-      let previous = try Some (Fs_util.read_file full_path) with _ -> None in
+      match snapshot_path ~worktree_path ~path ~full_path with
+      | Error e -> Error e
+      | Ok snap ->
       Sys.remove full_path;
       match git ~cwd:worktree_path ["add"; "--"; path] with
-      | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:false e
+      | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:false e
       | Ok _ ->
         (* Commit only this deletion; see write_to_branch. *)
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:true e
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:true e
         | Ok _ -> Ok ()
     end else
       Error (`Msg (Printf.sprintf "File %s not found" path))
@@ -682,7 +743,18 @@ let merge () =
           | Ok out -> List.filter (fun l -> String.trim l <> "") (String.split_on_char '\n' out)
           | Error _ -> []
       in
-      if staged <> [] then
+      (* If origin is a straight fast-forward from here, let git try it: a
+         fast-forward keeps unrelated staged changes, and git itself refuses if
+         they would be overwritten. Only if that fails is the leftover the
+         problem to report. *)
+      let fast_forwarded =
+        staged <> []
+        && Result.is_ok (git ~cwd:worktree_path
+             ["merge-base"; "--is-ancestor"; "HEAD"; "origin/" ^ ditz_branch])
+        && Result.is_ok (git ~cwd:worktree_path ["merge"; "--ff-only"; "origin/" ^ ditz_branch])
+      in
+      if fast_forwarded then Ok ()
+      else if staged <> [] then
         Error (`Msg (Printf.sprintf
           "the ditz metadata worktree %s has staged changes that are not \
            committed: %s. (A failed write or a hand edit can leave these.) \
