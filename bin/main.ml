@@ -172,7 +172,7 @@ let add_cmd =
           | Some t ->
             (match issue_type_of_string t with
              | Some ty -> Ok ty
-             | None -> Error (Printf.sprintf "unknown type '%s' (use bugfix, feature, task)" t))
+             | None -> Error (Printf.sprintf "unknown type '%s' (use %s)" t valid_types))
         in
         match issue_type_result with
         | Error e -> Fmt.epr "Error: %s@." e; 1
@@ -961,7 +961,7 @@ let set_cmd =
   let doc = "Update issue fields" in
   let info = Cmd.info "set" ~doc in
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
-  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Set issue type (bug, feature, task)") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Set issue type: bugfix, feature, task. An unknown type is an error and nothing is changed.") in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Set component") in
   let title_opt = Arg.(value & opt (some string) None & info ["title"] ~docv:"TITLE" ~doc:"Set title") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
