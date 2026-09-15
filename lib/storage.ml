@@ -300,8 +300,23 @@ module GitBackend = struct
       match Git.list_ditz_files_result () with
       | Error (`Msg e) ->
         Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
-      | Ok files when List.mem rel files -> Ok (Some (Committed rel))
-      | Ok _ ->
+      | Ok files ->
+      (* On a case-insensitive checkout (git sets core.ignorecase) a committed
+         file differing only in case IS the file a save would land on; report
+         it as committed, with its real spelling. On a case-sensitive one,
+         ids differing in case are distinct files and don't collide. *)
+      let ignorecase =
+        match Git.get_config "core.ignorecase" with
+        | Ok v -> String.lowercase_ascii (String.trim v) = "true"
+        | Error _ -> false
+      in
+      let same f =
+        if ignorecase then String.lowercase_ascii f = String.lowercase_ascii rel
+        else f = rel
+      in
+      match List.find_opt same files with
+      | Some committed -> Ok (Some (Committed committed))
+      | None ->
         (* Not committed -- but a save lands in the metadata worktree, not the
            branch, and the worktree can hold a file the branch doesn't: a hand
            edit, a write whose commit failed, or (case-insensitive filesystem)

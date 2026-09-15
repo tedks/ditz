@@ -145,6 +145,11 @@ let add_cmd =
                     Printf.sprintf "%s already exists but does not load as an \
                       issue (%s); refusing to overwrite it. Repair or remove %s, \
                       or use a different --id." path read_err path
+                  | Committed path when path <> Printf.sprintf ".ditz/issue-%s.yaml" id ->
+                    Printf.sprintf "%s already exists on the ditz-metadata \
+                      branch, and ids differing only in case collide on this \
+                      (case-insensitive) filesystem; refusing to overwrite it. \
+                      Use that issue, or a different --id." path
                   | Committed path ->
                     Printf.sprintf "%s already exists on the ditz-metadata \
                       branch but does not load as an issue (%s); refusing to \

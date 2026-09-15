@@ -517,6 +517,12 @@ let test_issue_file_occupant_git_backend () =
     assert (occ "broken" = Some (Storage.Committed ".ditz/issue-broken.yaml"));
     (* an invalid id is an error, never a quiet "absent" *)
     assert_error (Storage.issue_file_occupant ".ditz" "has.dot");
+    (* case: distinct ids on a case-sensitive checkout; the same file when git
+       says the filesystem ignores case (core.ignorecase) *)
+    assert (occ "BROKEN" = None);
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase true";
+    assert (occ "BROKEN" = Some (Storage.Committed ".ditz/issue-broken.yaml"));
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase false";
     (* a file in the metadata worktree that was never committed (hand edit, or
        a write whose commit failed) is invisible to the branch -- but it is the
        very file a save would replace, so it counts as present *)
