@@ -29,3 +29,15 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-15T00:19:08-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Design input from Codex (council round 3 on PR #30): instead of (or alongside)
+    an flock, build each write''s commit off to the side. GIT_INDEX_FILE=<tmp> git
+    read-tree <branch>; git update-index --add --cacheinfo <mode>,<blob>,<path> with
+    the blob from ''git hash-object -w'' of OUR content (not the shared worktree file);
+    git write-tree; git commit-tree -p <old>; then ''git update-ref refs/heads/ditz-metadata
+    <new> <old>'' as a compare-and-swap. On CAS failure, re-read, re-apply and retry.
+    This removes both the shared-index race (another writer''s add or worktree change
+    leaking into our commit) and lost updates, without holding a lock across user-visible
+    work. The persistent worktree would then need a checkout refresh after a ref move.'
