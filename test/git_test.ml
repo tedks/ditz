@@ -68,6 +68,11 @@ let assert_error = function
   | Ok _ -> failwith "Expected Error, got Ok"
   | Error _ -> ()
 
+let contains haystack needle =
+  let hl = String.length haystack and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
+  go 0
+
 (* ============ Tests ============ *)
 
 let test_is_git_repo () =
@@ -159,6 +164,115 @@ let test_write_to_branch () =
     assert (List.exists (fun f -> Filename.basename f = "issue-test1.yaml") files)
   );
   Printf.printf "PASS: write_to_branch\n"
+
+(* A write commits exactly its own file. Anything else staged in the shared
+   worktree (a failed write's leftovers, another process's `git add`) must stay
+   out of the commit -- it used to be swept in under the unrelated commit's
+   message, which is how stray test issues reached a real tracker. *)
+let test_write_commits_only_its_path () =
+  with_temp_git_repo (fun _ ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"OwnPath") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-first.yaml"
+                          ~content:"id: first\n" ~commit_msg:"first") in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    (* stage a stray file in the worktree, as a failed write would leave it *)
+    let stray = Filename.concat wt ".ditz/issue-stray.yaml" in
+    let () = assert_ok (Fs_util.write_file_atomic ~path:stray ~content:"id: stray\n") in
+    run_in ~cwd:wt "git add .ditz/issue-stray.yaml";
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-second.yaml"
+                          ~content:"id: second\n" ~commit_msg:"second") in
+    let head_files = assert_ok (Git.git ["show"; "--name-only"; "--format="; "ditz-metadata"]) in
+    assert (String.trim head_files = ".ditz/issue-second.yaml");
+    assert_error (Git.read_file_from_branch ".ditz/issue-stray.yaml");
+    (* ...and the stray is left exactly as it was: still staged, not dropped *)
+    let staged () = assert_ok (Git.git ~cwd:wt ["diff"; "--cached"; "--name-only"]) in
+    assert (String.trim (staged ()) = ".ditz/issue-stray.yaml");
+    (* rewriting an unchanged file is a no-op even with the stray still staged *)
+    let before = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-second.yaml"
+                          ~content:"id: second\n" ~commit_msg:"again") in
+    assert (assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) = before);
+    (* deletes are scoped the same way *)
+    let () = assert_ok (Git.delete_from_branch ~path:".ditz/issue-first.yaml"
+                          ~commit_msg:"delete first") in
+    let del_files = assert_ok (Git.git ["show"; "--name-only"; "--format="; "ditz-metadata"]) in
+    assert (String.trim del_files = ".ditz/issue-first.yaml");
+    assert_error (Git.read_file_from_branch ".ditz/issue-stray.yaml")
+  );
+  Printf.printf "PASS: write_commits_only_its_path\n"
+
+(* A write whose commit fails is rolled back: nothing staged, the worktree
+   file as it was, the branch untouched. With scoped commits a leftover would
+   otherwise stay staged forever and block every later merge (sync). A
+   failing pre-commit hook stands in for index.lock / commit failures. *)
+let test_failed_write_rolls_back () =
+  with_temp_git_repo (fun dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"Rollback") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-a.yaml"
+                          ~content:"id: a\ntitle: before\n" ~commit_msg:"a") in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    let hooks = Filename.concat dir "failing-hooks" in
+    Unix.mkdir hooks 0o755;
+    let hook = Filename.concat hooks "pre-commit" in
+    let oc = open_out hook in output_string oc "#!/bin/sh\nexit 1\n"; close_out oc;
+    Unix.chmod hook 0o755;
+    run_in ~cwd:dir (Printf.sprintf "git config core.hooksPath %s" (Filename.quote hooks));
+    let head () = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    let before = head () in
+    let index_clean () = Result.is_ok (Git.git ~cwd:wt ["diff"; "--cached"; "--quiet"]) in
+    (* new file: removed again *)
+    assert_error (Git.write_to_branch ~path:".ditz/issue-b.yaml" ~content:"id: b\n" ~commit_msg:"b");
+    assert (index_clean ());
+    assert (not (Sys.file_exists (Filename.concat wt ".ditz/issue-b.yaml")));
+    (* modified file: previous content restored *)
+    assert_error (Git.write_to_branch ~path:".ditz/issue-a.yaml"
+                    ~content:"id: a\ntitle: after\n" ~commit_msg:"a2");
+    assert (index_clean ());
+    assert (Fs_util.read_file (Filename.concat wt ".ditz/issue-a.yaml") = "id: a\ntitle: before\n");
+    (* delete: file restored *)
+    assert_error (Git.delete_from_branch ~path:".ditz/issue-a.yaml" ~commit_msg:"rm a");
+    assert (index_clean ());
+    assert (Sys.file_exists (Filename.concat wt ".ditz/issue-a.yaml"));
+    assert (head () = before);
+    (* a target with a staged hand edit AND a further unstaged one: both come
+       back exactly -- the staged version in the index, the newer one on disk *)
+    let a = Filename.concat wt ".ditz/issue-a.yaml" in
+    let put c = assert_ok (Fs_util.write_file_atomic ~path:a ~content:c) in
+    put "id: a\ntitle: staged\n";
+    run_in ~cwd:wt "git add -- .ditz/issue-a.yaml";
+    put "id: a\ntitle: unstaged\n";
+    assert_error (Git.write_to_branch ~path:".ditz/issue-a.yaml"
+                    ~content:"id: a\ntitle: ours\n" ~commit_msg:"a3");
+    assert (assert_ok (Git.git ~cwd:wt ["show"; ":.ditz/issue-a.yaml"]) = "id: a\ntitle: staged");
+    assert (Fs_util.read_file a = "id: a\ntitle: unstaged\n");
+    run_in ~cwd:wt "git checkout HEAD -- .ditz/issue-a.yaml";
+    (* an undo that cannot complete is reported, not swallowed: the hook makes
+       the directory read-only before failing, so the new file can't be removed *)
+    let ro_hook = Filename.concat hooks "pre-commit" in
+    let oc = open_out ro_hook in
+    output_string oc "#!/bin/sh\nchmod a-w .ditz\nexit 1\n"; close_out oc;
+    (match Git.write_to_branch ~path:".ditz/issue-c.yaml" ~content:"id: c\n" ~commit_msg:"c" with
+     | Ok () -> failwith "expected the commit to fail"
+     | Error (`Msg m) ->
+       Unix.chmod (Filename.concat wt ".ditz") 0o755;
+       if Unix.getuid () <> 0 then assert (contains m "incomplete"));
+    (try Sys.remove (Filename.concat wt ".ditz/issue-c.yaml") with Sys_error _ -> ());
+    let oc = open_out ro_hook in output_string oc "#!/bin/sh\nexit 1\n"; close_out oc;
+    (* an existing file that can't be read is refused BEFORE anything changes *)
+    if Unix.getuid () <> 0 then begin
+      Unix.chmod a 0o000;
+      (match Git.write_to_branch ~path:".ditz/issue-a.yaml" ~content:"id: a\n" ~commit_msg:"a4" with
+       | Ok () -> failwith "expected a refusal for an unreadable target"
+       | Error (`Msg m) -> assert (contains m "cannot read"));
+      Unix.chmod a 0o644;
+      assert (Fs_util.read_file a = "id: a\ntitle: before\n")
+    end;
+    (* and once commits work again, writes go through *)
+    run_in ~cwd:dir "git config --unset core.hooksPath";
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-b.yaml" ~content:"id: b\n" ~commit_msg:"b") in
+    assert (head () <> before)
+  );
+  Printf.printf "PASS: failed_write_rolls_back\n"
 
 let test_delete_from_branch () =
   with_temp_git_repo (fun _ ->
@@ -430,11 +544,6 @@ let test_stale_worktree_self_heal () =
   );
   Printf.printf "PASS: stale_worktree_self_heal\n"
 
-let contains haystack needle =
-  let hl = String.length haystack and nl = String.length needle in
-  let rec go i = i + nl <= hl && (String.sub haystack i nl = needle || go (i + 1)) in
-  go 0
-
 let test_self_heal_spares_other_worktrees () =
   with_temp_git_repo (fun temp_dir ->
     let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"T") in
@@ -626,6 +735,58 @@ let test_sync_auto_resolves_divergence () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_auto_resolves_divergence\n"
 
+(* A staged leftover in the metadata worktree blocks git merge. sync must say
+   which files and how to clear them -- not report a merge that never started
+   as "still mid-merge" -- and must not block when there is nothing to merge. *)
+let test_sync_names_staged_leftovers () =
+  let origin, c1, c2 = make_cloned_pair "ditz_syncstaged" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  let write id = assert_ok (Git.write_to_branch ~path:(Printf.sprintf ".ditz/issue-%s.yaml" id)
+                              ~content:(Printf.sprintf "id: %s\n" id) ~commit_msg:id) in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"St") in
+    write "s1";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    let () = assert_ok (Fs_util.write_file_atomic
+                          ~path:(Filename.concat wt ".ditz/issue-stray.yaml") ~content:"id: stray\n") in
+    run_in ~cwd:wt "git add -- .ditz/issue-stray.yaml";
+    (* nothing new on origin: the leftover does not block sync *)
+    let () = assert_ok (Git.sync ()) in
+    (* origin moves ahead: a fast-forward keeps the unrelated leftover staged *)
+    Sys.chdir c1;
+    write "s2";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-s2.yaml"));
+    assert (String.trim (assert_ok (Git.git ~cwd:wt ["diff"; "--cached"; "--name-only"]))
+            = ".ditz/issue-stray.yaml");
+    (* both sides move: a real merge is needed, and the leftover is named *)
+    write "local";
+    Sys.chdir c1;
+    write "s3";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    (match Git.sync () with
+     | Ok () -> failwith "expected sync to refuse with a staged leftover"
+     | Error (`Msg m) ->
+       assert (contains m "staged changes");
+       assert (contains m "issue-stray.yaml");
+       assert (not (contains m "mid-merge")));
+    (* following the advice unblocks it *)
+    run_in ~cwd:wt "git restore --staged -- .ditz/issue-stray.yaml";
+    Sys.remove (Filename.concat wt ".ditz/issue-stray.yaml");
+    let () = assert_ok (Git.sync ()) in
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-s3.yaml"));
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: sync_names_staged_leftovers\n"
+
 let test_sync_conflict_escape_hatch () =
   let origin, c1, c2 = make_cloned_pair "ditz_synchard" in
   let old_cwd = Sys.getcwd () in
@@ -785,6 +946,8 @@ let () =
   test_list_ditz_files ();
   test_write_to_branch ();
   test_delete_from_branch ();
+  test_write_commits_only_its_path ();
+  test_failed_write_rolls_back ();
   test_persistent_worktree ();
   test_ephemeral_worktree ();
   test_find_common_root ();
@@ -801,6 +964,7 @@ let () =
   test_write_does_not_follow_symlink ();
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
+  test_sync_names_staged_leftovers ();
   test_fresh_clone_can_join ();
   test_push_only_fresh_clone ();
   test_submodule_refused ();
