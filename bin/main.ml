@@ -124,19 +124,67 @@ let add_cmd =
          (--type) and any stdin read, so a no-op re-add never fails on a bad
          creation flag or blocks on stdin. *)
       let existing = match custom_id with
+        | None -> Ok None
         | Some id ->
           (match Ditz.Storage.find_issue_by_exact_id config.issue_dir id with
-           | Ok e -> Some e | Error _ -> None)
-        | None -> None
+           | Ok e -> Ok (Some e)
+           | Error (`Msg read_err) ->
+             (* No readable issue -- but only a truly ABSENT id may be created.
+                If issue-<id>.yaml exists and failed to load, creating would
+                save straight over it and destroy it (import refuses the same
+                case). A failed existence check is not an absence either. *)
+             (match Ditz.Storage.issue_file_occupant config.issue_dir id with
+              | Ok None -> Ok None
+              | Ok (Some occupant) ->
+                (* Say where the file is, and a remedy that works for that
+                   place: reads on the git backend come from the branch, so a
+                   committed file is only repaired by a commit, while an
+                   uncommitted one just needs committing or deleting. *)
+                Error (match occupant with
+                  | Ditz.Storage.On_disk path ->
+                    Printf.sprintf "%s already exists but does not load as an \
+                      issue (%s); refusing to overwrite it. Repair or remove %s, \
+                      or use a different --id." path read_err path
+                  | Committed path when path <> Printf.sprintf ".ditz/issue-%s.yaml" id ->
+                    Printf.sprintf "%s already exists on the ditz-metadata \
+                      branch, and ids differing only in case collide on this \
+                      (case-insensitive) filesystem; refusing to overwrite it. \
+                      Use that issue, or a different --id." path
+                  | Committed path ->
+                    Printf.sprintf "%s already exists on the ditz-metadata \
+                      branch but does not load as an issue (%s); refusing to \
+                      overwrite it. Repair or remove it in a checkout of \
+                      ditz-metadata and commit that, or use a different --id."
+                      path read_err
+                  | Uncommitted { path; rel; worktree; staged } ->
+                    (* A staged file must be unstaged too: deleted but still
+                       in the index, it would be committed by a later write. *)
+                    let keep, discard =
+                      if staged then
+                        (Printf.sprintf "git -C %s commit -m <msg> -- %s"
+                           (Filename.quote worktree) rel,
+                         Printf.sprintf "git -C %s rm -f -- %s"
+                           (Filename.quote worktree) rel)
+                      else
+                        (Printf.sprintf "git -C %s add -- %s && git -C %s commit -m <msg> -- %s"
+                           (Filename.quote worktree) rel (Filename.quote worktree) rel,
+                         Printf.sprintf "delete %s" path)
+                    in
+                    Printf.sprintf "%s already exists in the ditz metadata \
+                      worktree but is not committed%s; refusing to overwrite it. \
+                      To keep it: %s. To discard it: %s. Or use a different --id."
+                      path (if staged then " (it is staged)" else "") keep discard)
+              | Error (`Msg e) -> Error e))
       in
       match existing with
-      | Some existing ->
+      | Error e -> Fmt.epr "Error: %s@." e; 1
+      | Ok (Some existing) ->
         (match mode with
          | Json -> Fmt.pr "%s@." (Ditz.Types.simple_issue_json existing)
          | Quiet -> Fmt.pr "%s@." existing.id
          | Human -> Fmt.pr "Issue %s already exists@." existing.id);
         0
-      | None ->
+      | Ok None ->
         (* Creating: now resolve description and validate creation-only fields. *)
         let desc = match (desc, desc_stdin) with
           | (Some d, false) -> d

@@ -350,5 +350,30 @@ contains "child blocks its parent" '"blocks":["epic-p"]' "$("$BIN" show kid-a --
 contains "parent is blocked by its child" '"blocked_by":["kid-a"]' "$("$BIN" show epic-p --json)"
 contains "acceptance_criteria folded into desc" "Acceptance: the bar is met" "$("$BIN" show kid-a)"
 
+# add --id must never create over an issue file it cannot read. The exact-id
+# lookup fails for "unparseable" as well as "absent", and treating both as
+# absent saved the new issue straight over the old file, exit 0. (Last in the
+# script: the broken file would otherwise warn through every later command.)
+"$BIN" add "Precious" --id keep1 --ids-only >/dev/null
+printf 'id: keep1\ntitle: [unclosed\n' > .ditz/issue-keep1.yaml
+broken="$(cat .ditz/issue-keep1.yaml)"
+out="$("$BIN" add "Clobber" --id keep1 2>&1)"; check "add --id over unreadable file refused" 1 "$?"
+contains "refusal says it will not overwrite" "refusing to overwrite" "$out"
+contains "refusal names the file" ".ditz/issue-keep1.yaml already exists but does not load as an issue" "$out"
+contains "refusal says how to fix it" "Repair or remove .ditz/issue-keep1.yaml" "$out"
+if [ "$(cat .ditz/issue-keep1.yaml)" = "$broken" ]; then echo "ok: unreadable issue file left intact"
+else echo "FAIL: add --id rewrote an unreadable issue file"; fail=1; fi
+out="$("$BIN" add "Clobber" --id keep1 --ids-only 2>/dev/null)"; check "--ids-only refusal exits 1" 1 "$?"
+if [ -z "$out" ]; then echo "ok: --ids-only refusal prints nothing to stdout"
+else echo "FAIL: --ids-only refusal printed: $out"; fail=1; fi
+# an absent id still creates normally right next to it
+"$BIN" add "Fresh" --id keep2 --ids-only >/dev/null; check "absent --id still creates" 0 "$?"
+# A dangling symlink is still an entry the save's rename would replace; stat
+# says "absent", so occupancy must be decided with lstat.
+ln -s "$work/does-not-exist" .ditz/issue-dangle.yaml
+out="$("$BIN" add "Dangle" --id dangle 2>&1)"; check "add --id over a dangling symlink refused" 1 "$?"
+if [ -L .ditz/issue-dangle.yaml ]; then echo "ok: dangling symlink left in place"
+else echo "FAIL: add --id replaced a dangling symlink"; fail=1; fi
+
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

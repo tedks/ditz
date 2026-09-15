@@ -9,6 +9,17 @@ type backend =
 
 let default_issue_dir = ".ditz"
 
+(** Where an issue's file was found by [issue_file_occupant] -- which is also
+    what decides how someone would repair it. *)
+type occupant =
+  | On_disk of string       (** filesystem backend: the file's path *)
+  | Committed of string     (** git backend: path on the ditz-metadata branch *)
+  | Uncommitted of { path : string; rel : string; worktree : string; staged : bool }
+      (** git backend: an entry in the metadata worktree that is not on the
+          branch. [staged]: it is in the worktree's index (typically a write
+          whose commit failed), so deleting the file alone would still leave
+          it to be committed. *)
+
 let config_file () =
   match Sys.getenv_opt "HOME" with
   | Some home -> Ok (Filename.concat home ".ditz-config")
@@ -185,6 +196,13 @@ module FS = struct
         load_issue path
       else
         Error (`Msg (Printf.sprintf "Issue %s not found" id))
+
+  let issue_file_occupant dir id =
+    match issue_path dir id with
+    | Error _ as e -> e
+    | Ok path ->
+      Result.map (fun present -> if present then Some (On_disk path) else None)
+        (Fs_util.entry_exists path)
 end
 
 (* Git backend operations *)
@@ -268,7 +286,76 @@ module GitBackend = struct
       let path = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
       match Git.read_file_from_branch path with
       | Ok content -> parse_yaml issue_of_yaml content path
-      | Error _ -> Error (`Msg (Printf.sprintf "Issue %s not found" id))
+      | Error (`Msg e) ->
+        (* Pass git's reason through: usually "does not exist in
+           'ditz-metadata'", but an operational failure must not read as an
+           absence. *)
+        Error (`Msg (Printf.sprintf "Issue %s not read from the ditz-metadata branch: %s" id e))
+
+  let issue_file_occupant id =
+    match validate_id id with
+    | Error _ as e -> e
+    | Ok safe_id ->
+      let rel = Printf.sprintf ".ditz/issue-%s.yaml" safe_id in
+      match Git.list_ditz_files_result () with
+      | Error (`Msg e) ->
+        Error (`Msg (Printf.sprintf "Failed to list issues on the ditz branch: %s" e))
+      | Ok files ->
+      (* On a case-insensitive checkout (git sets core.ignorecase) a committed
+         file differing only in case IS the file a save would land on; report
+         it as committed, with its real spelling. On a case-sensitive one,
+         ids differing in case are distinct files and don't collide. *)
+      let ignorecase =
+        (* --type=bool: git accepts true/yes/on/1 *)
+        match Git.git ["config"; "--type=bool"; "--get"; "core.ignorecase"] with
+        | Ok v -> String.trim v = "true"
+        | Error _ -> false
+      in
+      (* An exact spelling wins over a case-folded one (a branch can hold both
+         issue-DUP.yaml and issue-dup.yaml). *)
+      let find_spelling names =
+        match List.find_opt (( = ) rel) names with
+        | Some _ as exact -> exact
+        | None when ignorecase ->
+          let low = String.lowercase_ascii rel in
+          List.find_opt (fun f -> String.lowercase_ascii f = low) names
+        | None -> None
+      in
+      match find_spelling files with
+      | Some committed -> Ok (Some (Committed committed))
+      | None ->
+        (* Not committed -- but a save lands in the metadata worktree, not the
+           branch, and the worktree can hold a file the branch doesn't: a hand
+           edit, a write whose commit failed, or (case-insensitive filesystem)
+           a committed file differing only in case. Check the entry the save
+           would actually replace.
+           Only an EXISTING persistent worktree is looked at: with none yet
+           (or in ephemeral mode, whose fresh checkout is exactly the branch)
+           there is nowhere an uncommitted file could be, and a check must not
+           create a worktree as a side effect. *)
+        if not (Git.persistent_worktree_valid ()) then Ok None
+        else
+          match Git.persistent_worktree_path () with
+          | None -> Error (`Msg "Not in a git repository")
+          | Some wt ->
+            let full = Filename.concat wt rel in
+            (match Fs_util.entry_exists full with
+             | Error _ as e -> e
+             | Ok false -> Ok None
+             | Ok true ->
+               (* Staged? git pathspecs match case-sensitively even with
+                  core.ignorecase, so find the index's own spelling and use it
+                  in the remedy commands. *)
+               let index_rel =
+                 match Git.git ~cwd:wt ["ls-files"; "--"; ".ditz"] with
+                 | Ok out ->
+                   find_spelling (List.filter (fun l -> l <> "")
+                                    (List.map String.trim (String.split_on_char '\n' out)))
+                 | Error _ -> None
+               in
+               let staged = index_rel <> None in
+               let rel = Option.value index_rel ~default:rel in
+               Ok (Some (Uncommitted { path = full; rel; worktree = wt; staged })))
 end
 
 (* Public API - dispatches to appropriate backend *)
@@ -381,6 +468,22 @@ let find_issue_by_exact_id dir id =
   match detect_backend () with
   | GitBranch -> GitBackend.find_issue_by_exact_id id
   | Filesystem d -> FS.find_issue_by_exact_id (if dir = default_issue_dir then d else dir) id
+
+(** Where is a file for issue [id], readable or not? [find_issue_by_exact_id]
+    answers a different question -- is there a READABLE issue -- and its Error
+    covers "absent", "unparseable" and "could not read" alike. A caller about to
+    create [id] needs this one, because saving over an unreadable file silently
+    destroys it. It checks the entry a save would replace ([lstat], so dangling
+    symlinks and case-only collisions count), and on the git backend also the
+    committed branch. It creates no worktree (validating an existing one may
+    prune a stale registration, as every git command here does). It is a check,
+    not a lock: a concurrent create of the same id between this and the save
+    is not prevented. [Ok None] means absent; Error means the store could not
+    be checked, so fail closed. *)
+let issue_file_occupant dir id =
+  match detect_backend () with
+  | GitBranch -> GitBackend.issue_file_occupant id
+  | Filesystem d -> FS.issue_file_occupant (if dir = default_issue_dir then d else dir) id
 
 (** Check which backend is currently active *)
 let current_backend () = detect_backend ()

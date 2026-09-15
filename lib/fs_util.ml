@@ -37,3 +37,15 @@ let write_file_atomic ~path ~content =
        close_out_noerr oc;
        (try Sys.remove temp_path with _ -> ());
        Error (`Msg (Printf.sprintf "Failed to write %s: %s" path (Printexc.to_string exn))))
+
+(** Is there a directory entry at [path]? [lstat], not [stat]: a dangling
+    symlink is still an entry that a rename onto [path] would replace. On a
+    case-insensitive filesystem this also finds an entry differing only in case,
+    which is exactly the file a write to [path] would land on. Error when the
+    check itself fails, so a caller guarding a write can fail closed. *)
+let entry_exists path =
+  match Unix.lstat path with
+  | _ -> Ok true
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok false
+  | exception Unix.Unix_error (e, _, _) ->
+    Error (`Msg (Printf.sprintf "Cannot check %s: %s" path (Unix.error_message e)))
