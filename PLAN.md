@@ -275,7 +275,7 @@ ditz start $(ditz list --unstarted --ids-only | head -3)
 #### 7. Idempotent Creates
 ```bash
 ditz add "Fix the thing" --id fix-auth-bug
-ditz add "Fix the thing" --id fix-auth-bug  # No-op or update, not error
+ditz add "Fix the thing" --id fix-auth-bug  # No-op: returns the existing issue unchanged (not an update, not an error)
 ```
 
 Deterministic IDs mean I can retry without creating duplicates.

@@ -30,7 +30,7 @@ worktree at `<repo>/.ditz-worktree` (reused across commands; set
 ## Issue schema
 
 ```yaml
-id: a3f29c…            # opaque, immutable, write-once. SHA1 by default;
+id: a3f29c…            # the issue's name: immutable, write-once. SHA1 by default;
                        # `--id <name>` sets a custom one. A unique prefix
                        # resolves it on the CLI, like a git hash.
 title: Fix the widget
@@ -63,6 +63,23 @@ file_refs:             # optional structured references
 Enums are written as plain scalars (`status: closed`), so `grep "status: closed"`
 works. The legacy variant-map form (`status:\n  Closed: []`) is still read and
 is rewritten to scalar form on the next save.
+
+## Ids are names
+
+There is no separate name field: an issue's `id` is its name.
+
+- `ditz add "title"` mints a 40-character SHA1. `ditz add "title" --id
+  login-firefox` makes `login-firefox` the id instead.
+- An id may contain only ASCII letters, digits, `-` and `_`, and it must match
+  the file name (`issue-<id>.yaml`).
+- Ids are permanent: other issues' `blocks` / `blocked_by` lists point at them,
+  so there is no rename.
+- `add --id` is idempotent, not an update. If the id already exists, nothing
+  changes (the title, description, type and component given are ignored).
+  Edit an existing issue with `ditz set <id>`. If `issue-<id>.yaml` exists but
+  can't be read, `add` refuses with an error rather than overwrite it.
+- Commands that take an id accept any unique prefix of it, and an exact id
+  always wins over longer ids it prefixes. (`add --id` itself matches exactly.)
 
 ## Dependencies and "epics"
 
