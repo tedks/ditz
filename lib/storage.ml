@@ -306,15 +306,22 @@ module GitBackend = struct
          it as committed, with its real spelling. On a case-sensitive one,
          ids differing in case are distinct files and don't collide. *)
       let ignorecase =
-        match Git.get_config "core.ignorecase" with
-        | Ok v -> String.lowercase_ascii (String.trim v) = "true"
+        (* --type=bool: git accepts true/yes/on/1 *)
+        match Git.git ["config"; "--type=bool"; "--get"; "core.ignorecase"] with
+        | Ok v -> String.trim v = "true"
         | Error _ -> false
       in
-      let same f =
-        if ignorecase then String.lowercase_ascii f = String.lowercase_ascii rel
-        else f = rel
+      (* An exact spelling wins over a case-folded one (a branch can hold both
+         issue-DUP.yaml and issue-dup.yaml). *)
+      let find_spelling names =
+        match List.find_opt (( = ) rel) names with
+        | Some _ as exact -> exact
+        | None when ignorecase ->
+          let low = String.lowercase_ascii rel in
+          List.find_opt (fun f -> String.lowercase_ascii f = low) names
+        | None -> None
       in
-      match List.find_opt same files with
+      match find_spelling files with
       | Some committed -> Ok (Some (Committed committed))
       | None ->
         (* Not committed -- but a save lands in the metadata worktree, not the
@@ -336,9 +343,18 @@ module GitBackend = struct
              | Error _ as e -> e
              | Ok false -> Ok None
              | Ok true ->
-               let staged =
-                 Result.is_ok (Git.git ~cwd:wt ["ls-files"; "--error-unmatch"; "--"; rel])
+               (* Staged? git pathspecs match case-sensitively even with
+                  core.ignorecase, so find the index's own spelling and use it
+                  in the remedy commands. *)
+               let index_rel =
+                 match Git.git ~cwd:wt ["ls-files"; "--"; ".ditz"] with
+                 | Ok out ->
+                   find_spelling (List.filter (fun l -> l <> "")
+                                    (List.map String.trim (String.split_on_char '\n' out)))
+                 | Error _ -> None
                in
+               let staged = index_rel <> None in
+               let rel = Option.value index_rel ~default:rel in
                Ok (Some (Uncommitted { path = full; rel; worktree = wt; staged })))
 end
 

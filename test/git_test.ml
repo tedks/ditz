@@ -520,8 +520,19 @@ let test_issue_file_occupant_git_backend () =
     (* case: distinct ids on a case-sensitive checkout; the same file when git
        says the filesystem ignores case (core.ignorecase) *)
     assert (occ "BROKEN" = None);
-    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase true";
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase yes";  (* any git bool *)
     assert (occ "BROKEN" = Some (Storage.Committed ".ditz/issue-broken.yaml"));
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase false";
+    (* an exact spelling wins over a case-folded one, when a branch holds both
+       (committed while ignorecase was off -- with it on, git's index would
+       fold the second spelling into the first) *)
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-Mixed.yaml"
+                          ~content:"id: Mixed\n" ~commit_msg:"Mixed") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-mixed.yaml"
+                          ~content:"id: mixed\n" ~commit_msg:"mixed") in
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase yes";
+    assert (occ "mixed" = Some (Storage.Committed ".ditz/issue-mixed.yaml"));
+    assert (occ "Mixed" = Some (Storage.Committed ".ditz/issue-Mixed.yaml"));
     run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase false";
     (* a file in the metadata worktree that was never committed (hand edit, or
        a write whose commit failed) is invisible to the branch -- but it is the
@@ -541,7 +552,15 @@ let test_issue_file_occupant_git_backend () =
     run_in ~cwd:wt "git add -- .ditz/issue-hand.yaml";
     (match occ "hand" with
      | Some (Storage.Uncommitted { staged; _ }) -> assert staged
-     | _ -> failwith "expected a staged Uncommitted occupant")
+     | _ -> failwith "expected a staged Uncommitted occupant");
+    (* under ignorecase the index's own spelling is reported (git pathspecs
+       stay case-sensitive, so the remedy must use it) *)
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase true";
+    (match occ "HAND" with
+     | Some (Storage.Uncommitted { staged; rel; _ }) ->
+       assert staged; assert (rel = ".ditz/issue-hand.yaml")
+     | Some _ | None -> ());   (* case-sensitive FS: lstat sees no issue-HAND.yaml *)
+    run_in ~cwd:(Sys.getcwd ()) "git config core.ignorecase false"
   );
   Printf.printf "PASS: issue_file_occupant_git_backend\n"
 

@@ -166,8 +166,8 @@ let add_cmd =
                          Printf.sprintf "git -C %s rm -f -- %s"
                            (Filename.quote worktree) rel)
                       else
-                        (Printf.sprintf "git -C %s add -- %s && git -C %s commit -m <msg>"
-                           (Filename.quote worktree) rel (Filename.quote worktree),
+                        (Printf.sprintf "git -C %s add -- %s && git -C %s commit -m <msg> -- %s"
+                           (Filename.quote worktree) rel (Filename.quote worktree) rel,
                          Printf.sprintf "delete %s" path)
                     in
                     Printf.sprintf "%s already exists in the ditz metadata \
