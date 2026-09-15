@@ -19,6 +19,10 @@ worktree at `<repo>/.ditz-worktree` (reused across commands; set
 `DITZ_EPHEMERAL_WORKTREE=1` for a throwaway worktree per command instead).
 
 - Every write commits to `ditz-metadata` automatically.
+- Writers take turns: each mutating command holds a tracker-wide lock
+  (`ditz-write.lock` in the git directory) from its read to its commit, so
+  parallel agents don't lose each other's updates. A waiting command gives up
+  after `DITZ_LOCK_TIMEOUT` seconds (default 30); readers never wait.
 - `ditz sync` fetches, merges, and pushes that branch. Merges auto-resolve:
   log_events union, status+disposition by last-write-wins, reference lists by
   three-way merge (no resurrection of deleted edges). Only when both sides
