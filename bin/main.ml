@@ -31,6 +31,14 @@ module StringSet = Set.Make(String)
 
 (* Commands *)
 
+(* Run a mutating command under the tracker's write lock (Storage.with_write_lock),
+   so concurrent ditz writers take turns instead of losing each other's updates.
+   The lock covers the whole command: the read it modifies AND the commit. *)
+let with_lock body =
+  match Ditz.Storage.with_write_lock body with
+  | Ok code -> code
+  | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
+
 let issue_type_of_string s =
   match String.lowercase_ascii s with
   | "bug" | "bugfix" -> Some Ditz.Types.Bugfix
@@ -136,7 +144,7 @@ let add_cmd =
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
-  let run title custom_id type_str component desc desc_stdin json quiet () =
+  let run title custom_id type_str component desc desc_stdin json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -351,7 +359,7 @@ let close_cmd =
   let wontfix_flag = Arg.(value & flag & info ["wontfix"] ~doc:"Close as won't fix") in
   let reorg_flag = Arg.(value & flag & info ["reorg"] ~doc:"Close due to reorganization") in
   let reason_opt = Arg.(value & opt (some string) None & info ["reason"] ~docv:"TEXT" ~doc:"Reason for closing (recorded on the close event)") in
-  let run ids fixed wontfix reorg reason json quiet () =
+  let run ids fixed wontfix reorg reason json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -407,7 +415,7 @@ let reopen_cmd =
   let doc = "Reopen one or more closed issues" in
   let info = Cmd.info "reopen" ~doc in
   let ids_arg = Arg.(non_empty & pos_all string [] & info [] ~docv:"ID" ~doc:"Issue ID(s) (or prefix)") in
-  let run ids json quiet () =
+  let run ids json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -448,7 +456,7 @@ let start_cmd =
   let doc = "Start working on one or more issues" in
   let info = Cmd.info "start" ~doc in
   let ids_arg = Arg.(non_empty & pos_all string [] & info [] ~docv:"ID" ~doc:"Issue ID(s) (or prefix)") in
-  let run ids json quiet () =
+  let run ids json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -489,7 +497,7 @@ let stop_cmd =
   let doc = "Stop working on one or more issues (pause)" in
   let info = Cmd.info "stop" ~doc in
   let ids_arg = Arg.(non_empty & pos_all string [] & info [] ~docv:"ID" ~doc:"Issue ID(s) (or prefix)") in
-  let run ids json quiet () =
+  let run ids json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -530,7 +538,7 @@ let drop_cmd =
   let doc = "Delete an issue" in
   let info = Cmd.info "drop" ~doc in
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID (or prefix)") in
-  let run id json quiet () =
+  let run id json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -684,7 +692,7 @@ let comment_cmd =
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID (or prefix)") in
   let comment_arg = Arg.(value & pos 1 (some string) None & info [] ~docv:"COMMENT" ~doc:"Comment text (or use --stdin)") in
   let stdin_flag = Arg.(value & flag & info ["stdin"] ~doc:"Read comment from stdin") in
-  let run id comment_text use_stdin json quiet () =
+  let run id comment_text use_stdin json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -724,7 +732,7 @@ let blocks_cmd =
   let info = Cmd.info "blocks" ~doc in
   let blocker_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"BLOCKER" ~doc:"Issue that blocks") in
   let blocked_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"BLOCKED" ~doc:"Issue that is blocked") in
-  let run blocker_id blocked_id json quiet () =
+  let run blocker_id blocked_id json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -877,7 +885,7 @@ let unblocks_cmd =
   let info = Cmd.info "unblocks" ~doc in
   let blocker_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"BLOCKER" ~doc:"Issue that was blocking") in
   let blocked_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"BLOCKED" ~doc:"Issue that was blocked") in
-  let run blocker_id blocked_id json quiet () =
+  let run blocker_id blocked_id json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -919,7 +927,7 @@ let ref_cmd =
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
   let path_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"PATH" ~doc:"File path (optionally with :LINE)") in
   let note_opt = Arg.(value & opt (some string) None & info ["note"; "n"] ~docv:"NOTE" ~doc:"Note about this reference") in
-  let run id path_spec note json quiet () =
+  let run id path_spec note json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -967,7 +975,7 @@ let set_cmd =
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
   let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Set status (unstarted, in_progress, paused)") in
-  let run id type_str component title desc desc_stdin status_str json quiet () =
+  let run id type_str component title desc desc_stdin status_str json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -1076,7 +1084,7 @@ let assign_cmd =
   let info = Cmd.info "assign" ~doc in
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
   let release_arg = Arg.(required & pos 1 (some string) None & info [] ~docv:"RELEASE" ~doc:"Release name") in
-  let run id release json quiet () =
+  let run id release json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -1107,7 +1115,7 @@ let unassign_cmd =
   let doc = "Remove issue from its release" in
   let info = Cmd.info "unassign" ~doc in
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
-  let run id json quiet () =
+  let run id json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -1204,7 +1212,7 @@ let sync_cmd =
   (* Report what actually happened. A bare "Synced" left agents checking with
      raw git (rev-parse / log origin/ditz-metadata..ditz-metadata, ~170 times
      across ~60 sessions) whether anything was pulled or pushed. *)
-  let run pull_only push_only json quiet () =
+  let run pull_only push_only json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     if not (Ditz.Git.is_git_repo ()) then begin
       Fmt.epr "Error: not in a git repository@."; 1
@@ -1287,7 +1295,7 @@ let import_cmd =
   let info = Cmd.info "import" ~doc ~man in
   let file_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"FILE" ~doc:"JSONL file ('-' or omitted = stdin)") in
   let format_opt = Arg.(value & opt string "beads" & info ["format"] ~docv:"FMT" ~doc:"Source format (only 'beads' supported)") in
-  let run file format json quiet () =
+  let run file format json quiet () = with_lock @@ fun () ->
     let mode = output_mode json quiet in
     if format <> "beads" then begin
       Fmt.epr "Error: unknown import format '%s' (only 'beads' is supported)@." format; 1
