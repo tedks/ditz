@@ -396,5 +396,31 @@ contains "status --json counts the unpushed write" '"tracking":true,"ahead":1,"b
 contains "sync says what it pushed" "pushed 1 commit" "$("$BIN" sync)"
 cd "$work"
 
+# Concurrent writers take turns (tracker write lock). Every mutating command is
+# read-modify-write, so without the lock parallel comments on one issue lose
+# each other's events -- and on the git backend collide on index.lock.
+"$BIN" add "Concurrent" --id conc --ids-only >/dev/null
+rcs=0; pids=""
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do "$BIN" comment conc "fs$i" >/dev/null 2>&1 & pids="$pids $!"; done
+for p in $pids; do wait "$p" || rcs=1; done
+check "parallel comments all succeed (filesystem)" 0 "$rcs"
+check "parallel comments all recorded (filesystem)" 12 \
+  "$("$BIN" show conc --json | grep -o '"what":"commented"' | wc -l | tr -d ' ')"
+
+g="$work/gitrepo"; mkdir "$g"; cd "$g"
+git init -q && git config user.email cli@test.local && git config user.name "CLI Test" \
+  && git commit -q --allow-empty -m init
+"$BIN" init --no-onboarding >/dev/null 2>&1
+"$BIN" add "Concurrent git" --id gconc --ids-only >/dev/null
+rcs=0; pids=""
+for i in 1 2 3 4 5 6 7 8 9 10; do "$BIN" comment gconc "git$i" >/dev/null 2>&1 & pids="$pids $!"; done
+for p in $pids; do wait "$p" || rcs=1; done
+check "parallel comments all succeed (git backend)" 0 "$rcs"
+check "parallel comments all recorded (git backend)" 10 \
+  "$("$BIN" show gconc --json | grep -o '"what":"commented"' | wc -l | tr -d ' ')"
+wt="$(git worktree list | awk '/ditz-metadata/{print $1}')"
+check "no leftovers staged in the metadata worktree" "" "$(git -C "$wt" diff --cached --name-only)"
+cd "$work"
+
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

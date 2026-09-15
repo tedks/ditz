@@ -64,3 +64,7 @@
 (test
  (name onboarding_test)
  (libraries ditz unix))
+
+(test
+ (name lock_test)
+ (libraries ditz unix))
