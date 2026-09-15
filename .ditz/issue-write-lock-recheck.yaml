@@ -45,3 +45,8 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-09-15T00:25:50-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Implemented in PR #32 (tracker-wide lockf lock held across each mutating
+    command).'
