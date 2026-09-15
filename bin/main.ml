@@ -1154,10 +1154,20 @@ let status_cmd =
       let bugs = count_type Ditz.Types.Bugfix in
       let features = count_type Ditz.Types.Feature in
       let tasks = count_type Ditz.Types.Task in
+      (* Sync position from local refs (no network), git backend only. Without
+         it a stranded unpushed commit or a stale clone is invisible until
+         someone runs raw git. *)
+      let sync = if Ditz.Storage.is_git_backend () then Some (Ditz.Git.sync_state ()) else None in
       (match mode with
        | Json ->
-         Fmt.pr {|{"total":%d,"open":%d,"unstarted":%d,"in_progress":%d,"paused":%d,"closed":%d,"bugs":%d,"features":%d,"tasks":%d}@.|}
-           (List.length issues) (List.length open_issues) unstarted in_progress paused closed bugs features tasks
+         let sync_json = match sync with
+           | None | Some (Error _) -> "null"
+           | Some (Ok Ditz.Git.No_remote_branch) -> {|{"remote":false}|}
+           | Some (Ok (Tracking { ahead; behind })) ->
+             Printf.sprintf {|{"remote":true,"ahead":%d,"behind":%d}|} ahead behind
+         in
+         Fmt.pr {|{"total":%d,"open":%d,"unstarted":%d,"in_progress":%d,"paused":%d,"closed":%d,"bugs":%d,"features":%d,"tasks":%d,"sync":%s}@.|}
+           (List.length issues) (List.length open_issues) unstarted in_progress paused closed bugs features tasks sync_json
        | Quiet ->
          Fmt.pr "%d %d %d %d %d@." (List.length open_issues) unstarted in_progress paused closed
        | Human ->
@@ -1169,7 +1179,17 @@ let status_cmd =
          Fmt.pr "Open by type:@.";
          Fmt.pr "  Bugs: %d@." bugs;
          Fmt.pr "  Features: %d@." features;
-         Fmt.pr "  Tasks: %d@." tasks);
+         Fmt.pr "  Tasks: %d@." tasks;
+         (match sync with
+          | None -> ()
+          | Some (Error (`Msg e)) -> Fmt.pr "@.Sync: unknown (%s)@." e
+          | Some (Ok Ditz.Git.No_remote_branch) ->
+            Fmt.pr "@.Sync: ditz-metadata is not on origin yet (run 'ditz sync' to publish it)@."
+          | Some (Ok (Tracking { ahead = 0; behind = 0 })) ->
+            Fmt.pr "@.Sync: up to date with origin (as of the last sync)@."
+          | Some (Ok (Tracking { ahead; behind })) ->
+            Fmt.pr "@.Sync: %d unpushed, %d to pull (as of the last sync; run 'ditz sync')@."
+              ahead behind));
       0
   in
   Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
@@ -1179,36 +1199,58 @@ let sync_cmd =
   let info = Cmd.info "sync" ~doc in
   let pull_only = Arg.(value & flag & info ["pull-only"] ~doc:"Only fetch and merge, don't push") in
   let push_only = Arg.(value & flag & info ["push-only"] ~doc:"Only push, don't fetch or merge") in
-  let run pull_only push_only () =
+  (* Report what actually happened. A bare "Synced" left agents checking with
+     raw git (rev-parse / log origin/ditz-metadata..ditz-metadata, ~170 times
+     across ~60 sessions) whether anything was pulled or pushed. *)
+  let run pull_only push_only json quiet () =
+    let mode = output_mode json quiet in
     if not (Ditz.Git.is_git_repo ()) then begin
       Fmt.epr "Error: not in a git repository@."; 1
     end else if not (Ditz.Git.ditz_metadata_exists ()) then begin
       Fmt.epr "Error: ditz-metadata branch does not exist. Run 'ditz init' first.@."; 1
     end else begin
-      match (pull_only, push_only) with
-      | (true, true) ->
-        Fmt.epr "Error: specify at most one of --pull-only, --push-only@."; 1
-      | (true, false) ->
-        (* Pull only: fetch and merge *)
-        (match Ditz.Git.fetch () with
-         | Error (`Msg e) -> Fmt.epr "Error fetching: %s@." e; 1
-         | Ok () ->
-           match Ditz.Git.merge () with
-           | Error (`Msg e) -> Fmt.epr "Error merging: %s@." e; 1
-           | Ok () -> Fmt.pr "Synced (pull only)@."; 0)
-      | (false, true) ->
-        (* Push only *)
-        (match Ditz.Git.push () with
-         | Error (`Msg e) -> Fmt.epr "Error pushing: %s@." e; 1
-         | Ok () -> Fmt.pr "Pushed ditz-metadata@."; 0)
-      | (false, false) ->
-        (* Full sync *)
-        (match Ditz.Git.sync () with
-         | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
-         | Ok () -> Fmt.pr "Synced ditz-metadata@."; 0)
+      let result = match (pull_only, push_only) with
+        | (true, true) -> Error "specify at most one of --pull-only, --push-only"
+        | (true, false) ->
+          Result.map_error (fun (`Msg e) -> e) (Ditz.Git.pull_report ())
+        | (false, true) ->
+          Result.map_error (fun (`Msg e) -> "pushing: " ^ e) (Ditz.Git.push_report ())
+        | (false, false) ->
+          Result.map_error (fun (`Msg e) -> e) (Ditz.Git.sync_report ())
+      in
+      match result with
+      | Error e -> Fmt.epr "Error: %s@." e; 1
+      | Ok (r : Ditz.Git.sync_report) ->
+        (* Where that leaves us, from local refs (includes anything left
+           unpushed by --pull-only, or unpulled by --push-only). *)
+        let ahead, behind = match Ditz.Git.sync_state () with
+          | Ok (Tracking { ahead; behind }) -> (Some ahead, Some behind)
+          | Ok No_remote_branch | Error _ -> (None, None)
+        in
+        let opt_int = function Some n -> string_of_int n | None -> "null" in
+        let commits n = if n = 1 then "1 commit" else Printf.sprintf "%d commits" n in
+        (match mode with
+         | Json ->
+           Fmt.pr {|{"pulled":%d,"pushed":%d,"head":"%s","ahead":%s,"behind":%s}@.|}
+             r.pulled r.pushed (Ditz.Types.escape_json_string r.head)
+             (opt_int ahead) (opt_int behind)
+         | Quiet -> Fmt.pr "%s@." r.head
+         | Human ->
+           let what =
+             if pull_only then Printf.sprintf "pulled %s" (commits r.pulled)
+             else if push_only then Printf.sprintf "pushed %s" (commits r.pushed)
+             else if r.pulled = 0 && r.pushed = 0 then "already up to date"
+             else Printf.sprintf "pulled %s, pushed %s" (commits r.pulled) (commits r.pushed)
+           in
+           Fmt.pr "Synced ditz-metadata: %s; now at %s.@." what r.head;
+           (match ahead with
+            | Some n when n > 0 && pull_only ->
+              Fmt.pr "%s not pushed yet (run 'ditz sync').@." (commits n)
+            | _ -> ()));
+        0
     end
   in
-  Cmd.v info Term.(const run $ pull_only $ push_only $ setup_log_term)
+  Cmd.v info Term.(const run $ pull_only $ push_only $ json_flag $ quiet_flag $ setup_log_term)
 
 let import_cmd =
   let doc = "Import issues from a beads `bd export` JSONL file" in
