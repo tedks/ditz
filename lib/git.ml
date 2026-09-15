@@ -509,13 +509,30 @@ let delete_from_branch ~path ~commit_msg =
       Error (`Msg (Printf.sprintf "File %s not found" path))
   )
 
-(** Fetch ditz-metadata from origin *)
+let remote_tracking_ref = "refs/remotes/origin/" ^ ditz_branch
+let local_ref = "refs/heads/" ^ ditz_branch
+
+(** Fetch ditz-metadata from origin into [remote_tracking_ref], with an
+    explicit refspec. A bare `git fetch origin ditz-metadata` only updates the
+    remote-tracking ref when the repo has a remote.origin.fetch refspec; a repo
+    without one (common for bare-at-root layouts built with `git init --bare`
+    + `remote add`) gets only FETCH_HEAD, so merge() then merged a STALE
+    origin/ditz-metadata and sync silently never pulled -- while still
+    printing "Synced". A missing remote branch (never pushed) is fine; any
+    other failure (offline, auth) is an error rather than a pretend success. *)
 let fetch () =
-  match git ["fetch"; "origin"; ditz_branch] with
+  match git ["fetch"; "origin"; "+" ^ local_ref ^ ":" ^ remote_tracking_ref] with
   | Ok _ -> Ok ()
-  | Error _ ->
-    (* Branch might not exist on remote yet, that's OK *)
-    Ok ()
+  | Error _ as err ->
+    (* Was it only that origin has no ditz-metadata yet? Ask ls-remote, whose
+       exit status 2 means "no matching ref" -- never parse fetch's message:
+       git translates it (LANGUAGE=de: "Konnte Remote-Referenz ... nicht
+       finden") and rewords it across versions, which made a first sync fail
+       outright in a non-English locale. *)
+    let (_, _, code) =
+      run_git_command ["ls-remote"; "--exit-code"; "--heads"; "origin"; local_ref]
+    in
+    if code = 2 then Ok () else err
 
 (** Auto-resolve a conflicted merge inside the metadata worktree.
     Conflicted issue files are merged semantically (Merge.merge_issues, using
@@ -787,20 +804,143 @@ let merge () =
               else "NOT aborted — the metadata worktree needs manual attention"))))
     )
 
-(** Push ditz-metadata to origin *)
-let push () =
-  (* On a fresh clone `sync --push-only` would have no local branch to push;
-     materialize it from origin first (no-op if it already exists). *)
-  ensure_local_branch ();
-  match git ["push"; "-u"; "origin"; ditz_branch] with
-  | Ok _ -> Ok ()
+let ref_exists r =
+  match git ["rev-parse"; "--verify"; "--quiet"; r ^ "^{commit}"] with
+  | Ok _ -> true
+  | Error _ -> false
+
+(* Number of commits reachable from [to_] but not from [from_]. *)
+let count_commits ~from_ ~to_ =
+  match git ["rev-list"; "--count"; from_ ^ ".." ^ to_] with
+  | Error e -> Error e
+  | Ok n ->
+    (match int_of_string_opt (String.trim n) with
+     | Some n -> Ok n
+     | None -> Error (`Msg (Printf.sprintf "unexpected rev-list output: %s" n)))
+
+let short_head () =
+  match git ["rev-parse"; "--short"; local_ref] with
+  | Ok sha -> Ok (String.trim sha)
   | Error e -> Error e
 
-(** Full sync: fetch, merge, push *)
-let sync () =
+(** Where the local tracker stands relative to origin, from LOCAL refs only
+    (no network): as of the last fetch or push. *)
+type sync_state =
+  | No_remote_branch                          (** never pushed / never fetched *)
+  | Tracking of { ahead : int; behind : int } (** unpushed / not yet pulled *)
+
+let sync_state () =
+  (* Read-only: no ensure_local_branch here, so asking where we stand never
+     creates a branch (which also changed what the next sync reported as
+     pulled). No local branch yet = everything on origin is still to pull. *)
+  if not (ref_exists remote_tracking_ref) then Ok No_remote_branch
+  else if not (ref_exists local_ref) then
+    match git ["rev-list"; "--count"; remote_tracking_ref] with
+    | Ok n -> Ok (Tracking { ahead = 0; behind = Option.value (int_of_string_opt (String.trim n)) ~default:0 })
+    | Error e -> Error e
+  else
+    match count_commits ~from_:remote_tracking_ref ~to_:local_ref,
+          count_commits ~from_:local_ref ~to_:remote_tracking_ref with
+    | Ok ahead, Ok behind -> Ok (Tracking { ahead; behind })
+    | (Error _ as e), _ | _, (Error _ as e) -> e
+
+(** What a sync did: commits brought in from origin, commits sent to it, and
+    the local head afterwards. *)
+type sync_report = { pulled : int; pushed : int; head : string }
+
+(** Fetch + merge, reporting how many commits origin had that we did not. *)
+let pull_report () =
+  (* Decide BEFORE anything materializes the local branch: on a fresh clone
+     the whole remote branch is what this pull brings in. *)
+  let had_local = ref_exists local_ref in
   match fetch () with
   | Error e -> Error e
   | Ok () ->
-    match merge () with
+    let pulled =
+      if not (ref_exists remote_tracking_ref) then Ok 0
+      else if had_local then count_commits ~from_:local_ref ~to_:remote_tracking_ref
+      else
+        match git ["rev-list"; "--count"; remote_tracking_ref] with
+        | Ok n -> Ok (Option.value (int_of_string_opt (String.trim n)) ~default:0)
+        | Error e -> Error e
+    in
+    match pulled with
     | Error e -> Error e
-    | Ok () -> push ()
+    | Ok pulled ->
+      match merge () with
+      | Error e -> Error e
+      | Ok () ->
+        Result.map (fun head -> { pulled; pushed = 0; head }) (short_head ())
+
+(** Push, reporting how many commits origin actually received -- from git's
+    own account of the ref update, not from the (possibly stale)
+    remote-tracking ref. *)
+let push_report () =
+  (* On a fresh clone `sync --push-only` would have no local branch to push;
+     materialize it from origin first (no-op if it already exists). *)
+  ensure_local_branch ();
+  match git ["rev-parse"; "--verify"; local_ref ^ "^{commit}"] with
+  | Error e -> Error e
+  | Ok sha ->
+    let sha = String.trim sha in
+    (* Push that exact commit to refs/heads/ditz-metadata: a write landing
+       mid-push is neither pushed nor recorded as pushed, and a
+       remote.origin.push mapping can't send it somewhere else. *)
+    match git ["push"; "--porcelain"; "origin"; sha ^ ":" ^ local_ref] with
+    | Error e -> Error e
+    | Ok out ->
+      (* porcelain: "<flag>\t<src>:<dst>\t<summary>" with flag '=' up to
+         date, '*' new branch, ' ' fast-forward ("old..new"). *)
+      let dst = ":" ^ local_ref ^ "\t" in
+      let has_dst line =
+        let n = String.length dst and l = String.length line in
+        let rec go i = i + n <= l && (String.sub line i n = dst || go (i + 1)) in
+        go 0
+      in
+      let pushed =
+        match List.find_opt has_dst (String.split_on_char '\n' out) with
+        | None -> Error (`Msg (Printf.sprintf "unexpected git push output: %s" out))
+        | Some line ->
+          let summary = match String.split_on_char '\t' line with
+            | [ _; _; summary ] -> summary | _ -> "" in
+          (match line.[0] with
+           | '=' -> Ok 0
+           | '*' ->
+             (match git ["rev-list"; "--count"; sha] with
+              | Ok n -> Ok (Option.value (int_of_string_opt (String.trim n)) ~default:0)
+              | Error e -> Error e)
+           | _ ->
+             (match String.index_opt summary '.' with
+              | Some i ->
+                let old_ = String.sub summary 0 i in
+                count_commits ~from_:old_ ~to_:sha
+              | None -> Error (`Msg (Printf.sprintf "unexpected git push summary: %s" line))))
+      in
+      match pushed with
+      | Error e -> Error e
+      | Ok pushed ->
+        (* origin's ditz-metadata is now [sha] (as far as this push knows; a
+           server-side hook could add to it -- the next fetch will show that).
+           git only records that in the remote-tracking ref when a fetch
+           refspec maps it, so record it ourselves. *)
+        (match git ["update-ref"; remote_tracking_ref; sha] with
+         | Ok _ -> ()
+         | Error (`Msg e) ->
+           Logs.warn (fun m -> m "could not update %s after pushing: %s" remote_tracking_ref e));
+        match git ["rev-parse"; "--short"; sha] with
+        | Ok head -> Ok { pulled = 0; pushed; head = String.trim head }
+        | Error e -> Error e
+
+(** Full sync: fetch, merge, push. *)
+let sync_report () =
+  match pull_report () with
+  | Error e -> Error e
+  | Ok pulled ->
+    Result.map (fun (pushed : sync_report) -> { pushed with pulled = pulled.pulled })
+      (push_report ())
+
+(** Push ditz-metadata to origin *)
+let push () = Result.map ignore (push_report ())
+
+(** Full sync: fetch, merge, push *)
+let sync () = Result.map ignore (sync_report ())

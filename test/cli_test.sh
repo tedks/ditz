@@ -380,5 +380,21 @@ contains "child blocks its parent" '"blocks":["epic-p"]' "$("$BIN" show kid-a --
 contains "parent is blocked by its child" '"blocked_by":["kid-a"]' "$("$BIN" show epic-p --json)"
 contains "acceptance_criteria folded into desc" "Acceptance: the bar is met" "$("$BIN" show kid-a)"
 
+# sync/status report where the tracker stands (git backend, local bare origin)
+sr="$work/syncrepo"; mkdir "$sr"; git init -q --bare "$work/syncorigin.git"; cd "$sr"
+git init -q && git config user.email cli@test.local && git config user.name "CLI Test" \
+  && git commit -q --allow-empty -m init && git remote add origin "$work/syncorigin.git"
+"$BIN" init --no-onboarding >/dev/null 2>&1
+"$BIN" add "Sync me" --id syncme --ids-only >/dev/null
+contains "status --json before any sync: no tracking ref" '"sync":{"tracking":false}' "$("$BIN" status --json)"
+out="$("$BIN" sync --json)"; check "sync --json succeeds" 0 "$?"
+contains "sync --json reports the push" '"pulled":0,"pushed":2' "$out"
+contains "sync --json ends in step" '"ahead":0,"behind":0' "$out"
+contains "status after sync: up to date" "up to date with origin" "$("$BIN" status)"
+"$BIN" comment syncme "unpushed" >/dev/null
+contains "status --json counts the unpushed write" '"tracking":true,"ahead":1,"behind":0' "$("$BIN" status --json)"
+contains "sync says what it pushed" "pushed 1 commit" "$("$BIN" sync)"
+cd "$work"
+
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"

@@ -787,6 +787,113 @@ let test_sync_names_staged_leftovers () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_names_staged_leftovers\n"
 
+(* A repo whose origin has no remote.origin.fetch refspec (bare-at-root
+   layouts built with `git init --bare` + `remote add`) must still PULL on
+   sync. `git fetch origin ditz-metadata` only writes FETCH_HEAD there, so the
+   merge used a stale origin/ditz-metadata and sync never brought anything in
+   while reporting success. And with no origin at all, a pull is an error, not
+   a silent no-op. *)
+let test_sync_pulls_without_fetch_refspec () =
+  let origin, c1, c2 = make_cloned_pair "ditz_norefspec" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  let write id = assert_ok (Git.write_to_branch ~path:(Printf.sprintf ".ditz/issue-%s.yaml" id)
+                              ~content:(Printf.sprintf "id: %s\n" id) ~commit_msg:id) in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"N") in
+    write "n1";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    run_in ~cwd:c2 "git config --unset-all remote.origin.fetch";
+    Sys.chdir c1;
+    write "n2";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-n2.yaml"));
+    cleanup ()
+  with e -> cleanup (); raise e);
+  with_temp_git_repo (fun _ ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"NoOrigin") in
+    assert_error (Git.fetch ()));
+  Printf.printf "PASS: sync_pulls_without_fetch_refspec\n"
+
+(* sync says what it did, and sync_state says where the clone stands, from
+   local refs only. *)
+let test_sync_reports_and_state () =
+  let origin, c1, c2 = make_cloned_pair "ditz_syncrep" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  let state () = assert_ok (Git.sync_state ()) in
+  let tracking a b = match state () with
+    | Git.Tracking { ahead; behind } -> ahead = a && behind = b
+    | Git.No_remote_branch -> false
+  in
+  let write id = assert_ok (Git.write_to_branch ~path:(Printf.sprintf ".ditz/issue-%s.yaml" id)
+                              ~content:(Printf.sprintf "id: %s\n" id) ~commit_msg:id) in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"R") in
+    write "r1"; write "r2";
+    assert (state () = Git.No_remote_branch);
+    let n_local = int_of_string (assert_ok (Git.git ["rev-list"; "--count"; "ditz-metadata"])) in
+    (* the first push of a never-pushed branch must not depend on git's
+       (translatable) error text; best effort -- only discriminating where
+       git's translations are installed *)
+    let saved = List.map (fun v -> (v, Sys.getenv_opt v)) ["LANGUAGE"; "LC_ALL"; "LANG"] in
+    Unix.putenv "LANGUAGE" "de"; Unix.putenv "LC_ALL" "de_DE.UTF-8"; Unix.putenv "LANG" "de_DE.UTF-8";
+    let r = Git.sync_report () in
+    List.iter (fun (v, old) -> Unix.putenv v (Option.value old ~default:"")) saved;
+    let r = assert_ok r in
+    assert (r.pulled = 0 && r.pushed = n_local);
+    assert (tracking 0 0);
+    (* pushed comes from what git actually did, not a stale tracking ref *)
+    run_in ~cwd:c1 "git update-ref refs/remotes/origin/ditz-metadata ditz-metadata~1";
+    let r = assert_ok (Git.push_report ()) in
+    assert (r.pushed = 0);
+    assert (tracking 0 0);
+    (* sync_state is read-only: in a clone that has fetched but never synced
+       it reports everything as behind, without creating the local branch *)
+    Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    assert (tracking 0 n_local);
+    assert (not (Git.branch_exists "ditz-metadata"));
+    (* fresh clone: the whole branch is what the pull brings in *)
+    let r = assert_ok (Git.sync_report ()) in
+    assert (r.pulled = n_local && r.pushed = 0);
+    assert (tracking 0 0);
+    (* an unpushed write shows as ahead; the push reports it and clears it *)
+    Sys.chdir c1;
+    write "r3";
+    assert (tracking 1 0);
+    let r = assert_ok (Git.sync_report ()) in
+    assert (r.pulled = 0 && r.pushed = 1);
+    assert (tracking 0 0);
+    (* the other clone pulls exactly that commit *)
+    Sys.chdir c2;
+    let r = assert_ok (Git.sync_report ()) in
+    assert (r.pulled = 1 && r.pushed = 0);
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-r3.yaml"));
+    assert (tracking 0 0);
+    (* pull-only leaves local work unpushed, and says so via state *)
+    write "r4";
+    let r = assert_ok (Git.pull_report ()) in
+    assert (r.pulled = 0 && r.pushed = 0);
+    assert (tracking 1 0);
+    (* a remote.origin.push mapping can't divert the push *)
+    run_in ~cwd:c2 "git config remote.origin.push refs/heads/ditz-metadata:refs/heads/elsewhere";
+    let r = assert_ok (Git.push_report ()) in
+    assert (r.pushed = 1);
+    let remote_head = assert_ok (Git.git ["ls-remote"; "origin"; "refs/heads/ditz-metadata"]) in
+    let local_head = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    assert (String.sub remote_head 0 40 = local_head);
+    assert (assert_ok (Git.git ["ls-remote"; "origin"; "refs/heads/elsewhere"]) = "");
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: sync_reports_and_state\n"
+
 let test_sync_conflict_escape_hatch () =
   let origin, c1, c2 = make_cloned_pair "ditz_synchard" in
   let old_cwd = Sys.getcwd () in
@@ -965,6 +1072,8 @@ let () =
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
   test_sync_names_staged_leftovers ();
+  test_sync_pulls_without_fetch_refspec ();
+  test_sync_reports_and_state ();
   test_fresh_clone_can_join ();
   test_push_only_fresh_clone ();
   test_submodule_refused ();
