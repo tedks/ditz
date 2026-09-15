@@ -1162,9 +1162,9 @@ let status_cmd =
        | Json ->
          let sync_json = match sync with
            | None | Some (Error _) -> "null"
-           | Some (Ok Ditz.Git.No_remote_branch) -> {|{"remote":false}|}
+           | Some (Ok Ditz.Git.No_remote_branch) -> {|{"tracking":false}|}
            | Some (Ok (Tracking { ahead; behind })) ->
-             Printf.sprintf {|{"remote":true,"ahead":%d,"behind":%d}|} ahead behind
+             Printf.sprintf {|{"tracking":true,"ahead":%d,"behind":%d}|} ahead behind
          in
          Fmt.pr {|{"total":%d,"open":%d,"unstarted":%d,"in_progress":%d,"paused":%d,"closed":%d,"bugs":%d,"features":%d,"tasks":%d,"sync":%s}@.|}
            (List.length issues) (List.length open_issues) unstarted in_progress paused closed bugs features tasks sync_json
@@ -1184,7 +1184,9 @@ let status_cmd =
           | None -> ()
           | Some (Error (`Msg e)) -> Fmt.pr "@.Sync: unknown (%s)@." e
           | Some (Ok Ditz.Git.No_remote_branch) ->
-            Fmt.pr "@.Sync: ditz-metadata is not on origin yet (run 'ditz sync' to publish it)@."
+            (* Only what the local refs know: a bare clone, or a branch nobody
+               has synced here yet, looks the same as "never pushed". *)
+            Fmt.pr "@.Sync: no origin/ditz-metadata recorded here yet (run 'ditz sync')@."
           | Some (Ok (Tracking { ahead = 0; behind = 0 })) ->
             Fmt.pr "@.Sync: up to date with origin (as of the last sync)@."
           | Some (Ok (Tracking { ahead; behind })) ->

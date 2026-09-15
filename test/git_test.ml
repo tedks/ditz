@@ -839,11 +839,28 @@ let test_sync_reports_and_state () =
     write "r1"; write "r2";
     assert (state () = Git.No_remote_branch);
     let n_local = int_of_string (assert_ok (Git.git ["rev-list"; "--count"; "ditz-metadata"])) in
-    let r = assert_ok (Git.sync_report ()) in
+    (* the first push of a never-pushed branch must not depend on git's
+       (translatable) error text; best effort -- only discriminating where
+       git's translations are installed *)
+    let saved = List.map (fun v -> (v, Sys.getenv_opt v)) ["LANGUAGE"; "LC_ALL"; "LANG"] in
+    Unix.putenv "LANGUAGE" "de"; Unix.putenv "LC_ALL" "de_DE.UTF-8"; Unix.putenv "LANG" "de_DE.UTF-8";
+    let r = Git.sync_report () in
+    List.iter (fun (v, old) -> Unix.putenv v (Option.value old ~default:"")) saved;
+    let r = assert_ok r in
     assert (r.pulled = 0 && r.pushed = n_local);
     assert (tracking 0 0);
-    (* fresh clone: the whole branch is what the pull brings in *)
+    (* pushed comes from what git actually did, not a stale tracking ref *)
+    run_in ~cwd:c1 "git update-ref refs/remotes/origin/ditz-metadata ditz-metadata~1";
+    let r = assert_ok (Git.push_report ()) in
+    assert (r.pushed = 0);
+    assert (tracking 0 0);
+    (* sync_state is read-only: in a clone that has fetched but never synced
+       it reports everything as behind, without creating the local branch *)
     Sys.chdir c2;
+    run_in ~cwd:c2 "git fetch origin";
+    assert (tracking 0 n_local);
+    assert (not (Git.branch_exists "ditz-metadata"));
+    (* fresh clone: the whole branch is what the pull brings in *)
     let r = assert_ok (Git.sync_report ()) in
     assert (r.pulled = n_local && r.pushed = 0);
     assert (tracking 0 0);
@@ -865,6 +882,14 @@ let test_sync_reports_and_state () =
     let r = assert_ok (Git.pull_report ()) in
     assert (r.pulled = 0 && r.pushed = 0);
     assert (tracking 1 0);
+    (* a remote.origin.push mapping can't divert the push *)
+    run_in ~cwd:c2 "git config remote.origin.push refs/heads/ditz-metadata:refs/heads/elsewhere";
+    let r = assert_ok (Git.push_report ()) in
+    assert (r.pushed = 1);
+    let remote_head = assert_ok (Git.git ["ls-remote"; "origin"; "refs/heads/ditz-metadata"]) in
+    let local_head = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    assert (String.sub remote_head 0 40 = local_head);
+    assert (assert_ok (Git.git ["ls-remote"; "origin"; "refs/heads/elsewhere"]) = "");
     cleanup ()
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_reports_and_state\n"
