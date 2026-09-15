@@ -21,3 +21,12 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-15T00:08:46-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Council round 3 on PR #28 (Claude): when the metadata worktree is INVALID,
+    the save path''s remedy (''Remove it (git worktree remove --force)'') would destroy
+    any uncommitted issue file inside it. Worth warning in that message. Also: after
+    a resolved-but-uncommitted merge (sync killed before its commit), writes now fail
+    with ''cannot do a partial commit during a merge'' (PR #30''s scoped commits);
+    the error could suggest running ''ditz sync''.'
