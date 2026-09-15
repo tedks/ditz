@@ -179,6 +179,9 @@ let test_write_commits_only_its_path () =
     let head_files = assert_ok (Git.git ["show"; "--name-only"; "--format="; "ditz-metadata"]) in
     assert (String.trim head_files = ".ditz/issue-second.yaml");
     assert_error (Git.read_file_from_branch ".ditz/issue-stray.yaml");
+    (* ...and the stray is left exactly as it was: still staged, not dropped *)
+    let staged () = assert_ok (Git.git ~cwd:wt ["diff"; "--cached"; "--name-only"]) in
+    assert (String.trim (staged ()) = ".ditz/issue-stray.yaml");
     (* rewriting an unchanged file is a no-op even with the stray still staged *)
     let before = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
     let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-second.yaml"
