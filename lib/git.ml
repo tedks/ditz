@@ -374,6 +374,28 @@ let list_ditz_files_result () =
 let list_ditz_files () =
   match list_ditz_files_result () with Ok files -> files | Error _ -> []
 
+(** Undo a write whose git step failed, so it does not linger in the shared
+    worktree. Scoped commits (commit -- <path>) no longer sweep a leftover into
+    the next write's commit -- so a leftover would stay: staged, it makes every
+    later `git merge` refuse ("changes registered in the index"), blocking
+    sync; unstaged, it is an uncommitted edit nobody asked for. The command
+    already reported failure, so the right state is "as before". Best effort:
+    if the unstage itself fails (e.g. the same index.lock), say so. *)
+let rollback_path ~worktree_path ~path ~full_path ~previous ~staged err =
+  let unstage =
+    if not staged then Ok ()
+    else Result.map ignore (git ~cwd:worktree_path ["reset"; "-q"; "--"; path])
+  in
+  (match previous with
+   | Some old -> ignore (Fs_util.write_file_atomic ~path:full_path ~content:old)
+   | None -> (try Sys.remove full_path with Sys_error _ -> ()));
+  match err, unstage with
+  | e, Ok () -> Error e
+  | `Msg m, Error (`Msg u) ->
+    Error (`Msg (Printf.sprintf
+      "%s (and unstaging %s failed: %s -- check `git -C %s status`)"
+      m path u (Filename.quote worktree_path)))
+
 (** Write content to a file on ditz-metadata branch using worktree.
     The write is atomic (temp + rename) and does not follow a symlink planted
     at the destination -- issue files are parsed from external sources, so the
@@ -384,6 +406,9 @@ let write_to_branch ~path ~content ~commit_msg =
     let full_path = Filename.concat worktree_path path in
     let dir = Filename.dirname full_path in
     let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
+    (* What was there before, so a write that fails after touching the
+       worktree can be undone (see rollback_path). *)
+    let previous = try Some (Fs_util.read_file full_path) with _ -> None in
     match Fs_util.write_file_atomic ~path:full_path ~content with
     | Error e -> Error e
     | Ok () ->
@@ -395,13 +420,13 @@ let write_to_branch ~path ~content ~commit_msg =
        commit are limited to [path]; `commit -- <path>` commits that path's
        state and leaves any other staged change staged. *)
     match git ~cwd:worktree_path ["add"; "--"; path] with
-    | Error e -> Error e
+    | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:false e
     | Ok _ ->
       match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"; "--"; path] with
       | Ok _ -> Ok () (* this path is unchanged: nothing to commit *)
       | Error _ ->
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> Error e
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:true e
         | Ok _ -> Ok ()
   )
 
@@ -410,13 +435,14 @@ let delete_from_branch ~path ~commit_msg =
   with_worktree (fun worktree_path ->
     let full_path = Filename.concat worktree_path path in
     if Sys.file_exists full_path then begin
+      let previous = try Some (Fs_util.read_file full_path) with _ -> None in
       Sys.remove full_path;
       match git ~cwd:worktree_path ["add"; "--"; path] with
-      | Error e -> Error e
+      | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:false e
       | Ok _ ->
         (* Commit only this deletion; see write_to_branch. *)
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> Error e
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~previous ~staged:true e
         | Ok _ -> Ok ()
     end else
       Error (`Msg (Printf.sprintf "File %s not found" path))
@@ -638,8 +664,42 @@ let merge () =
     Ok () (* Nothing to merge *)
   else
     with_worktree (fun worktree_path ->
+      let merging () = Result.is_ok (git ~cwd:worktree_path ["rev-parse"; "-q"; "--verify"; "MERGE_HEAD"]) in
+      (* git merge refuses outright when the index has changes relative to
+         HEAD. Say what they are and how to clear them, instead of letting the
+         refusal reach conflict resolution (which then reports a merge that
+         never started as "still mid-merge"). *)
+      (* Nothing to merge (origin is already in our history): don't make a
+         leftover staged file block a sync that has nothing to merge. *)
+      let up_to_date =
+        Result.is_ok (git ~cwd:worktree_path
+          ["merge-base"; "--is-ancestor"; "origin/" ^ ditz_branch; "HEAD"])
+      in
+      if up_to_date && not (merging ()) then Ok () else
+      let staged =
+        if merging () then []
+        else match git ~cwd:worktree_path ["diff"; "--cached"; "--name-only"] with
+          | Ok out -> List.filter (fun l -> String.trim l <> "") (String.split_on_char '\n' out)
+          | Error _ -> []
+      in
+      if staged <> [] then
+        Error (`Msg (Printf.sprintf
+          "the ditz metadata worktree %s has staged changes that are not \
+           committed: %s. (A failed write or a hand edit can leave these.) \
+           To keep them: git -C %s commit -m <msg>. To discard them: git -C %s \
+           restore --staged -- %s (and restore or delete the files). Then run \
+           'ditz sync' again."
+          worktree_path (String.concat ", " staged) (Filename.quote worktree_path)
+          (Filename.quote worktree_path) (String.concat " " (List.map Filename.quote staged))))
+      else
       match git ~cwd:worktree_path ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
       | Ok _ -> Ok ()
+      | Error (`Msg m) when not (merging ()) ->
+        (* The merge never started (e.g. uncommitted edits it would
+           overwrite): nothing to resolve or abort. Pass git's reason on. *)
+        Error (`Msg (Printf.sprintf
+          "sync could not start merging origin/%s: %s (check `git -C %s status`)"
+          ditz_branch m (Filename.quote worktree_path)))
       | Error e ->
         (try resolve_conflicted_merge ~merge_error:(Error e) worktree_path
          with exn ->
