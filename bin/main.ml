@@ -46,38 +46,61 @@ let status_of_string s =
   | "closed" -> Some Ditz.Types.Closed
   | _ -> None
 
+let valid_statuses = "unstarted, in_progress, paused, closed, or open (= not closed)"
+let valid_types = "bugfix, feature, task"
+
+(* A filter value is a comma-separated list, and EVERY element must be known.
+   An unknown value used to warn on stderr and return the unfiltered list with
+   exit 0 -- a silently wrong answer that agents piping through `tail` took as
+   success ("list -s open" listed closed issues). [parse] maps one element to
+   the values it stands for ("open" is three statuses). *)
+let parse_filter ~what ~valid parse s =
+  let parts = String.split_on_char ',' s |> List.map String.trim in
+  if List.mem "" parts then
+    Error (Printf.sprintf "empty %s in '%s' (use %s)" what s valid)
+  else
+    List.fold_left (fun acc p ->
+      match acc, parse p with
+      | (Error _ as e), _ -> e
+      | Ok vs, Some v -> Ok (vs @ v)
+      | Ok _, None -> Error (Printf.sprintf "unknown %s '%s' (use %s)" what p valid))
+      (Ok []) parts
+
+let status_filter_of_string s =
+  match String.lowercase_ascii s with
+  | "open" -> Some Ditz.Types.[Unstarted; In_progress; Paused]
+  | _ -> Option.map (fun st -> [st]) (status_of_string s)
+
 let list_cmd =
   let doc = "List issues" in
   let info = Cmd.info "list" ~doc in
-  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Filter by type (bug, feature, task)") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:("Filter by type: " ^ valid_types ^ ". Comma-separate to match any of several.")) in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Filter by component") in
-  let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Filter by status (unstarted, in_progress, paused, closed)") in
+  let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Filter by status: unstarted, in_progress, paused, closed, or open (anything not closed). Comma-separate to match any of several. An unknown value is an error.") in
   let run type_filter component_filter status_filter json quiet () =
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
       Fmt.epr "Error: %s@." e; 1
     | Ok config ->
+      (* Validate filters before loading anything: a bad value is an error, not
+         a no-op filter. *)
+      let parse_opt f = function None -> Ok None | Some s -> Result.map Option.some (f s) in
+      let types = parse_opt (parse_filter ~what:"type" ~valid:valid_types
+                               (fun t -> Option.map (fun ty -> [ty]) (issue_type_of_string t)))
+                    type_filter in
+      let statuses = parse_opt (parse_filter ~what:"status" ~valid:valid_statuses
+                                  status_filter_of_string) status_filter in
+      match types, statuses with
+      | Error e, _ | _, Error e -> Fmt.epr "Error: %s@." e; 1
+      | Ok types, Ok statuses ->
       let issues = Ditz.Storage.load_issues config.issue_dir in
-      (* Apply filters *)
-      let issues = match type_filter with
-        | None -> issues
-        | Some t ->
-          match issue_type_of_string t with
-          | None -> Fmt.epr "Warning: unknown type '%s'@." t; issues
-          | Some typ -> List.filter (fun (i : Ditz.Types.issue) -> i.issue_type = typ) issues
+      let keep (i : Ditz.Types.issue) =
+        (match types with None -> true | Some ts -> List.mem i.issue_type ts)
+        && (match component_filter with None -> true | Some c -> i.component = c)
+        && (match statuses with None -> true | Some ss -> List.mem i.status ss)
       in
-      let issues = match component_filter with
-        | None -> issues
-        | Some c -> List.filter (fun (i : Ditz.Types.issue) -> i.component = c) issues
-      in
-      let issues = match status_filter with
-        | None -> issues
-        | Some s ->
-          match status_of_string s with
-          | None -> Fmt.epr "Warning: unknown status '%s'@." s; issues
-          | Some st -> List.filter (fun (i : Ditz.Types.issue) -> i.status = st) issues
-      in
+      let issues = List.filter keep issues in
       (match mode with
        | Json ->
          Fmt.pr "%s@." (Ditz.Types.issues_to_json issues)
@@ -109,7 +132,7 @@ let add_cmd =
   let info = Cmd.info "add" ~doc in
   let title_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TITLE") in
   let id_opt = Arg.(value & opt (some string) None & info ["id"] ~docv:"ID" ~doc:"Use specific ID (idempotent - returns existing issue if ID exists)") in
-  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Issue type (bugfix, feature, task; default task)") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:("Issue type: " ^ valid_types ^ " (default task)")) in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
@@ -149,7 +172,7 @@ let add_cmd =
           | Some t ->
             (match issue_type_of_string t with
              | Some ty -> Ok ty
-             | None -> Error (Printf.sprintf "unknown type '%s' (use bugfix, feature, task)" t))
+             | None -> Error (Printf.sprintf "unknown type '%s' (use %s)" t valid_types))
         in
         match issue_type_result with
         | Error e -> Fmt.epr "Error: %s@." e; 1
@@ -938,7 +961,7 @@ let set_cmd =
   let doc = "Update issue fields" in
   let info = Cmd.info "set" ~doc in
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID") in
-  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:"Set issue type (bug, feature, task)") in
+  let type_opt = Arg.(value & opt (some string) None & info ["type"; "t"] ~docv:"TYPE" ~doc:("Set issue type: " ^ valid_types ^ ". An unknown type is an error and nothing is changed.")) in
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Set component") in
   let title_opt = Arg.(value & opt (some string) None & info ["title"] ~docv:"TITLE" ~doc:"Set title") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
@@ -969,13 +992,23 @@ let set_cmd =
         match status_result with
         | Error e -> Fmt.epr "Error: %s@." e; 1
         | Ok issue ->
-        (* Apply updates *)
-        let issue = match type_str with
-          | None -> issue
+        (* An unknown --type aborts the whole set, like an unknown --status:
+           warning and applying the other fields left the type silently unset
+           with exit 0. *)
+        let type_result = match type_str with
+          | None -> Ok None
           | Some t ->
-            match issue_type_of_string t with
-            | None -> Fmt.epr "Warning: unknown type '%s'@." t; issue
-            | Some typ -> Ditz.Issue_ops.set_type issue ~issue_type:typ ~who:config.name
+            (match issue_type_of_string t with
+             | Some typ -> Ok (Some typ)
+             | None -> Error (Printf.sprintf "unknown type '%s' (use %s)" t valid_types))
+        in
+        match type_result with
+        | Error e -> Fmt.epr "Error: %s@." e; 1
+        | Ok type_opt ->
+        (* Apply updates *)
+        let issue = match type_opt with
+          | None -> issue
+          | Some typ -> Ditz.Issue_ops.set_type issue ~issue_type:typ ~who:config.name
         in
         let issue = match component with
           | None -> issue

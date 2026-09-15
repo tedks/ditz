@@ -21,7 +21,7 @@ The loop:
 
 Create / inspect:
 - `ditz add "title" -t bugfix|feature|task -c <component> --desc "..."`
-- `ditz show <id>` · `ditz list --status unstarted|in_progress|paused|closed` · `ditz search <q>`
+- `ditz show <id>` · `ditz list --status open|unstarted|in_progress|paused|closed` (comma-separate to combine) · `ditz search <q>`
 - `--json` on any command for machine output; `--ids-only` for just ids
 - ids: copy them from output; a unique prefix works (like git hashes);
   `--id <name>` sets a deterministic id (re-creating with it is idempotent)

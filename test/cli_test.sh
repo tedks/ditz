@@ -65,6 +65,36 @@ out="$("$BIN" set "$id" --status closed 2>&1)"; check "set --status closed refus
 contains "set-closed names remedy" "use 'close" "$out"
 out="$("$BIN" set "$id" --status bogus 2>&1)"; check "set --status bogus rejected" 1 "$?"
 
+# list filters: an unknown value is an ERROR, never an unfiltered list. It used
+# to warn and return everything with exit 0, so `list -s open` listed closed
+# issues and agents reading stdout took that as the answer.
+for n in un ip pa cl; do "$BIN" add "filter $n" --id "f-$n" -c filt --ids-only >/dev/null; done
+"$BIN" start f-ip >/dev/null; "$BIN" stop f-pa >/dev/null; "$BIN" close f-cl >/dev/null
+"$BIN" set f-un -t bugfix >/dev/null
+ids() { "$BIN" list -c filt "$@" --ids-only 2>/dev/null | sort | tr '\n' ' '; }
+check "list -s open is everything not closed" "f-ip f-pa f-un " "$(ids -s open)"
+check "list -s closed" "f-cl " "$(ids -s closed)"
+check "list -s comma list matches any" "f-cl f-ip " "$(ids -s in_progress,closed)"
+check "list -t filters" "f-un " "$(ids -t bugfix)"
+check "list -t comma list" "f-cl f-ip f-pa f-un " "$(ids -t bugfix,task)"
+check "list filter ignores case and spaces" "f-ip f-pa f-un " "$(ids -s ' OPEN , Open ')"
+check "list -s open,closed is everything" "f-cl f-ip f-pa f-un " "$(ids -s open,closed)"
+check "list duplicate filter values list each issue once" "f-cl " "$(ids -s closed,closed)"
+check "list status aliases still work" "f-ip f-pa " "$(ids -s started,stopped)"
+out="$("$BIN" list -s bogus 2>&1)"; check "list unknown status is an error" 1 "$?"
+contains "unknown status names the valid values" "open (= not closed)" "$out"
+check "list unknown status prints no issues" "" "$("$BIN" list -s bogus --ids-only 2>/dev/null)"
+out="$("$BIN" list -s open,bogus --json 2>/dev/null)"; check "one bad element fails the whole filter" 1 "$?"
+check "bad filter --json prints nothing on stdout" "" "$out"
+out="$("$BIN" list -t epic 2>&1)"; check "list unknown type is an error" 1 "$?"
+contains "unknown type names the valid values" "bugfix, feature, task" "$out"
+"$BIN" list -s "open," >/dev/null 2>&1; check "list empty filter element is an error" 1 "$?"
+# set -t with an unknown type aborts the whole set (it used to warn, skip the
+# type, apply the rest, and exit 0)
+out="$("$BIN" set f-un -t epic --title "should not apply" 2>&1)"; check "set unknown type is an error" 1 "$?"
+contains "set unknown type names the valid values" "bugfix, feature, task" "$out"
+contains "set unknown type applied nothing" '"title":"filter un"' "$("$BIN" show f-un --json)"
+
 # --json stays clean (no hint leakage): ready --json parses as a JSON array
 "$BIN" close "$id" --fixed >/dev/null 2>&1
 rj="$("$BIN" ready --json 2>/dev/null)"
