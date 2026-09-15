@@ -509,13 +509,27 @@ let delete_from_branch ~path ~commit_msg =
       Error (`Msg (Printf.sprintf "File %s not found" path))
   )
 
-(** Fetch ditz-metadata from origin *)
+let remote_tracking_ref = "refs/remotes/origin/" ^ ditz_branch
+let local_ref = "refs/heads/" ^ ditz_branch
+
+(** Fetch ditz-metadata from origin into [remote_tracking_ref], with an
+    explicit refspec. A bare `git fetch origin ditz-metadata` only updates the
+    remote-tracking ref when the repo has a remote.origin.fetch refspec; a repo
+    without one (common for bare-at-root layouts built with `git init --bare`
+    + `remote add`) gets only FETCH_HEAD, so merge() then merged a STALE
+    origin/ditz-metadata and sync silently never pulled -- while still
+    printing "Synced". A missing remote branch (never pushed) is fine; any
+    other failure (offline, auth) is an error rather than a pretend success. *)
 let fetch () =
-  match git ["fetch"; "origin"; ditz_branch] with
+  match git ["fetch"; "origin"; "+" ^ local_ref ^ ":" ^ remote_tracking_ref] with
   | Ok _ -> Ok ()
-  | Error _ ->
-    (* Branch might not exist on remote yet, that's OK *)
-    Ok ()
+  | Error (`Msg e) as err ->
+    let missing = "couldn't find remote ref" in
+    let rec has i =
+      i + String.length missing <= String.length e
+      && (String.sub e i (String.length missing) = missing || has (i + 1))
+    in
+    if has 0 then Ok () else err
 
 (** Auto-resolve a conflicted merge inside the metadata worktree.
     Conflicted issue files are merged semantically (Merge.merge_issues, using

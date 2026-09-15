@@ -787,6 +787,39 @@ let test_sync_names_staged_leftovers () =
   with e -> cleanup (); raise e);
   Printf.printf "PASS: sync_names_staged_leftovers\n"
 
+(* A repo whose origin has no remote.origin.fetch refspec (bare-at-root
+   layouts built with `git init --bare` + `remote add`) must still PULL on
+   sync. `git fetch origin ditz-metadata` only writes FETCH_HEAD there, so the
+   merge used a stale origin/ditz-metadata and sync never brought anything in
+   while reporting success. And with no origin at all, a pull is an error, not
+   a silent no-op. *)
+let test_sync_pulls_without_fetch_refspec () =
+  let origin, c1, c2 = make_cloned_pair "ditz_norefspec" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  let write id = assert_ok (Git.write_to_branch ~path:(Printf.sprintf ".ditz/issue-%s.yaml" id)
+                              ~content:(Printf.sprintf "id: %s\n" id) ~commit_msg:id) in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"N") in
+    write "n1";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    run_in ~cwd:c2 "git config --unset-all remote.origin.fetch";
+    Sys.chdir c1;
+    write "n2";
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let () = assert_ok (Git.sync ()) in
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-n2.yaml"));
+    cleanup ()
+  with e -> cleanup (); raise e);
+  with_temp_git_repo (fun _ ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"NoOrigin") in
+    assert_error (Git.fetch ()));
+  Printf.printf "PASS: sync_pulls_without_fetch_refspec\n"
+
 let test_sync_conflict_escape_hatch () =
   let origin, c1, c2 = make_cloned_pair "ditz_synchard" in
   let old_cwd = Sys.getcwd () in
@@ -965,6 +998,7 @@ let () =
   test_sync_auto_resolves_divergence ();
   test_sync_conflict_escape_hatch ();
   test_sync_names_staged_leftovers ();
+  test_sync_pulls_without_fetch_refspec ();
   test_fresh_clone_can_join ();
   test_push_only_fresh_clone ();
   test_submodule_refused ();
