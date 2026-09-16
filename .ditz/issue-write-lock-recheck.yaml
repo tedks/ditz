@@ -79,3 +79,9 @@ log_events:
   who: Ted Smith
   what: stopped
   comment: ""
+- time: 2026-09-16T23:40:59-00:00
+  who: Ted Smith
+  what: blocked by sync-status-visibility
+  comment: ""
+blocked_by:
+- sync-status-visibility
