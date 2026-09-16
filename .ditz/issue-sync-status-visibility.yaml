@@ -24,3 +24,27 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-09-16T23:40:35-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'HANDOFF 2026-09-16 (session paused; resume from here).
+
+    PR: https://github.com/tedks/ditz/pull/31 (draft), branch sync-status-visibility,
+    head d7da66f, base commit-own-path-only (#30).
+
+    Contents: (1) Bug fix: fetch uses the explicit refspec +refs/heads/ditz-metadata:refs/remotes/origin/ditz-metadata.
+    Repos with no remote.origin.fetch (e.g. ~/Projects/ditz, a bare repo) never updated
+    origin/ditz-metadata, so `sync` never pulled; ditz''s own tracking ref sat stale
+    from 09-01 to 09-13. (2) sync reports pulled/pushed/head (text and --json); status
+    shows ahead/behind from local refs ("tracking" JSON key).
+
+    Review: round 4 Important findings fixed in d7da66f: locale-proof missing-branch
+    check via `ls-remote --exit-code`; pushed count from `git push --porcelain`; push
+    pinned to `<sha>:refs/heads/ditz-metadata`; read-only sync_state. Codex round
+    5: D clean. Claude round 5 was interrupted: re-run Claude on `git diff fee1240..d7da66f`.
+
+    Known limits (fine, documented): status is "as of the last sync"; a server hook
+    that adds commits only shows after the next fetch; remotes not named origin aren''t
+    supported (pre-existing).
+
+    Next: one clean Claude pass, then merge after #30.'
