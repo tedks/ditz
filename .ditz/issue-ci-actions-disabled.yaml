@@ -23,3 +23,9 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-16T23:40:59-00:00
+  who: Ted Smith
+  what: blocks land-id-docs-stack
+  comment: ""
+blocks:
+- land-id-docs-stack
