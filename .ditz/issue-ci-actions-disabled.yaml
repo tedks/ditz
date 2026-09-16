@@ -1,0 +1,25 @@
+id: ci-actions-disabled
+title: 'DECISION: GitHub Actions is disabled on tedks/ditz (merge gate has no CI)'
+desc: "Found 2026-09-14: `gh api repos/tedks/ditz/actions/permissions` returns {\"enabled\":false}.
+  The last CI run started 2026-09-13T05:35Z. No run exists for PRs #29-#32 or for
+  any push to #27/#28 since then. Nobody in this session changed the setting; it may
+  have been turned off deliberately (e.g. to save minutes; see ci-store-cache-broken).\nThe
+  merge gate (council fixpoint + CI green) can't be met while it's off. Operator to
+  choose:\n  (a) re-enable Actions (repo Settings > Actions) and let CI run on the
+  open PRs before merging; or\n  (b) keep it off and accept `nix develop --command
+  dune runtest --force` run locally at each PR head as the gate, noted in each merge
+  comment.\nAll six open PRs (#27-#32) pass the full local suite at their current
+  heads."
+type: task
+component: ci
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-16T23:40:57-00:00
+references: []
+log_events:
+- time: 2026-09-16T23:40:57-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
