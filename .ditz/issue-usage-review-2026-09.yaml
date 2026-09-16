@@ -58,8 +58,8 @@ type: task
 component: adoption
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: unstarted
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-16T23:41:14-00:00
 references: []
 log_events:
@@ -67,3 +67,9 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-16T23:41:15-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: Record only; each actionable finding is a separate issue (listed in the
+    description). Items 6, 10 and 12 are not filed; the operator should decide whether
+    they want them.
