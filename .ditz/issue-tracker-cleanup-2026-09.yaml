@@ -1,0 +1,42 @@
+id: tracker-cleanup-2026-09
+title: Tracker hygiene found in the 2026-09 usage review
+desc: 'Housekeeping from the usage review. Each item needs care; some touch other
+  repos'' trackers.
+
+  ditz tracker (this repo):
+
+  - qa (''A "quoted" title'') and qb (''B title'') are test artifacts (reporter Review
+  <review@test.local>) that landed in commit fc2ca40 with a real issue. Drop them.
+
+  - Several issues still carry reporter "Test User" (3 created 2026-07-17, after PR
+  #7''s fix). Check where that identity came from; framework0''s ~/.ditz-config held
+  "Test User" until 07-19.
+
+  - follow-up-import-dotted-ids, follow-up-import-parent-child, follow-up-import-comments
+  look fixed by PR #24 (import-fidelity). Verify against master and close with --reason.
+
+  Other trackers:
+
+  - dotfiles: epics dotfiles-mge-epic and dotfiles-ktl-epic BLOCK their children (the
+  reverse of FORMAT.md''s convention, where an epic is blocked by its members). So
+  `ditz ready` ranks the 2 epics first and hides all 10 subtasks. Flip the edges.
+
+  - Stale in_progress claims: pairmarket 4 (since 06-27/07-06), dotfiles 2 (since
+  08-18).
+
+  - Sync drift seen 09-13: pairmarket local ditz-metadata 7 behind origin; website''s
+  ditz-metadata never pushed. Once sync-status-visibility (PR #31) lands, `ditz status`
+  shows this directly.'
+type: task
+component: adoption
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-16T23:40:57-00:00
+references: []
+log_events:
+- time: 2026-09-16T23:40:57-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
