@@ -10,7 +10,7 @@ type: bugfix
 component: storage
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
+status: paused
 disposition:
 creation_time: 2026-09-14T23:48:29-00:00
 references: []
@@ -43,3 +43,7 @@ log_events:
     restore, when st_nlink > 1). Add tests.\nClaude round 5 was interrupted: re-run
     Claude on the fix delta together with the fix above.\nNext: fix the Important,
     run a convergence round on the new delta, then merge after #29 (see ci-actions-disabled)."
+- time: 2026-09-16T23:40:34-00:00
+  who: Ted Smith
+  what: stopped
+  comment: ""
