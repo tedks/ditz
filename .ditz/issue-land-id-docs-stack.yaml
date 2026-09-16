@@ -1,0 +1,37 @@
+id: land-id-docs-stack
+title: 'Land PR #28 (add --id overwrite fix) then #27 (--id docs)'
+desc: "Origin: a Discord request to \"add a name param to issue creation\". Resolution
+  (operator, 2026-09-13): no new flag; --id already IS the name, so document it better.
+  Along the way a data-loss bug turned up in add --id.\n\nSTACK (merge in this order,
+  normal merges):\n1. https://github.com/tedks/ditz/pull/28 (draft), branch add-id-refuse-unreadable,
+  head 800940d, base master.\n   `add --id X` used to silently OVERWRITE an existing
+  issue-X.yaml that it couldn't read or parse (exit 0). It now refuses. Storage.issue_file_occupant
+  reports where the conflicting file is: On_disk / Committed (branch; exact spelling
+  first, then case-folded under core.ignorecase) / Uncommitted (existing persistent
+  worktree only, never creating one; staged flag uses the index's own spelling). The
+  message gives commands that work for that location.\n   Review: council rounds 1-4
+  fixed (Claude + Codex; agy unavailable, its auth expired 09-13). Codex round 5 on
+  `git diff b624ef7..800940d`: clean. Claude round 5 was interrupted: re-run Claude
+  on that delta. If clean, it's at fixpoint.\n2. https://github.com/tedks/ditz/pull/27
+  (draft), branch doc-id-naming, head 777b298, base add-id-refuse-unreadable.\n   Documents
+  --id where agents look: add --help DESCRIPTION/EXAMPLES, re-add message (\"already
+  exists; nothing changed (use 'ditz set X')\"), invalid-id error lists ASCII letters/digits/-/_,
+  onboarding snippet \"Naming issues\" block, FORMAT.md \"Ids are names\", README.\n
+  \  Review: clean at its last round (Claude and Codex). It has only been rebased
+  since.\n\nBefore merging: settle ci-actions-disabled (Actions is off on the repo).
+  After #28 merges, rebase #27 onto master (retarget its base).\nFollow-ups already
+  filed: onboard-refresh-stale-block (existing AGENTS.md blocks never get the new
+  text), id-leading-dash, add-refusal-message-polish, readd-mismatch-warning."
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-16T23:40:57-00:00
+references: []
+log_events:
+- time: 2026-09-16T23:40:57-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
