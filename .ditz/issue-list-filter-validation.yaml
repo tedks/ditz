@@ -24,3 +24,20 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-09-16T23:40:33-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'HANDOFF 2026-09-16 (session paused; resume from here).
+
+    PR: https://github.com/tedks/ditz/pull/29 (draft), branch list-filter-validation,
+    head 51a0c13, base master. Bottom of stack #29 -> #30 -> #31 -> #32.
+
+    Review: Claude round 3 clean, Codex round 3 clean. Round 4 nit (valid_types in
+    --type help) applied in 51a0c13, and Codex round 5 called that delta clean. Claude
+    round 5 was interrupted: re-run a light Claude pass on `git diff a755bfa..51a0c13`.
+
+    CI: GitHub Actions is DISABLED on tedks/ditz (see ci-actions-disabled). Local
+    `nix develop --command dune runtest --force` passes.
+
+    Next: settle ci-actions-disabled, mark the PR ready, merge (normal merge) into
+    master, then rebase #30 onto master.'
