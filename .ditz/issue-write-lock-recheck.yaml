@@ -50,3 +50,28 @@ log_events:
   what: commented
   comment: 'Implemented in PR #32 (tracker-wide lockf lock held across each mutating
     command).'
+- time: 2026-09-16T23:40:36-00:00
+  who: Ted Smith
+  what: commented
+  comment: "HANDOFF 2026-09-16 (session paused; resume from here).\nPR: https://github.com/tedks/ditz/pull/32
+    (draft), branch write-lock-recheck, head 0d10fcc, base sync-status-visibility
+    (#31).\nContents: Storage.with_write_lock, a lockf lock on <git common dir>/ditz-write.lock
+    (git backend) or <issue dir>/.ditz-write.lock (fs backend), held across the whole
+    run of every mutating command. Evidence: 12 parallel `comment` on one issue kept
+    1 of 12 without the lock (both backends) and 12 of 12 with it (5 of 5 repeated
+    runs).\nReview: first full review was Codex round 5. OPEN IMPORTANT findings:\n
+    \ 1. lib/storage.ml write_lock_path picks the lock before load_config and only
+    looks at the literal .ditz, so a filesystem tracker at a configured config.issue_dir
+    runs UNLOCKED. Fix: pass the issue dir in (with_write_lock ~issue_dir) and take
+    the lock after load_config.\n  2. The lock covers unbounded stdin reads (`comment
+    --stdin`, `add/set --desc-stdin`, `import -`). A stalled pipe blocks every writer
+    until DITZ_LOCK_TIMEOUT; Codex reproduced it. Fix: read stdin before taking the
+    lock (restructure those commands), or take the lock only around load->save.\n
+    \ 3. Commits made while locked run git hooks, and a hook that runs a mutating
+    ditz command self-deadlocks until the timeout. Options: an env marker (DITZ_LOCK_HELD=<pid/path>)
+    so a nested ditz in the same process tree fails fast with a clear message; or
+    document it.\nNits: .ditz/.ditz-write.lock shows up untracked in fs-backend repos
+    (put the lock elsewhere or write a .gitignore); test/lock_test.ml uses fixed sleeps
+    to assume the child holds the lock, so use a pipe handshake.\nClaude round 5 was
+    interrupted: re-run a full Claude review after the fixes.\nNext: fix 1-3 and the
+    nits, run a convergence round, merge last in the stack."
