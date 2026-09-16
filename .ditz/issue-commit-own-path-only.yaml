@@ -51,5 +51,11 @@ log_events:
   who: Ted Smith
   what: blocked by list-filter-validation
   comment: ""
+- time: 2026-09-16T23:40:58-00:00
+  who: Ted Smith
+  what: blocks sync-status-visibility
+  comment: ""
+blocks:
+- sync-status-visibility
 blocked_by:
 - list-filter-validation
