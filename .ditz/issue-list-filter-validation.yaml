@@ -11,7 +11,7 @@ type: bugfix
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
+status: paused
 disposition:
 creation_time: 2026-09-14T23:48:29-00:00
 references: []
@@ -41,3 +41,7 @@ log_events:
 
     Next: settle ci-actions-disabled, mark the PR ready, merge (normal merge) into
     master, then rebase #30 onto master.'
+- time: 2026-09-16T23:40:34-00:00
+  who: Ted Smith
+  what: stopped
+  comment: ""
