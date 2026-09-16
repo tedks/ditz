@@ -49,5 +49,11 @@ log_events:
   who: Ted Smith
   what: blocks commit-own-path-only
   comment: ""
+- time: 2026-09-16T23:41:00-00:00
+  who: Ted Smith
+  what: blocked by ci-actions-disabled
+  comment: ""
 blocks:
 - commit-own-path-only
+blocked_by:
+- ci-actions-disabled
