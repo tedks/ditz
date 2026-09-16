@@ -11,7 +11,7 @@ type: feature
 component: sync
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
+status: paused
 disposition:
 creation_time: 2026-09-14T23:48:30-00:00
 references: []
@@ -48,3 +48,7 @@ log_events:
     supported (pre-existing).
 
     Next: one clean Claude pass, then merge after #30.'
+- time: 2026-09-16T23:40:35-00:00
+  who: Ted Smith
+  what: stopped
+  comment: ""
