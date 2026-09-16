@@ -23,3 +23,23 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-09-16T23:40:34-00:00
+  who: Ted Smith
+  what: commented
+  comment: "HANDOFF 2026-09-16 (session paused; resume from here).\nPR: https://github.com/tedks/ditz/pull/30
+    (draft), branch commit-own-path-only, head f392d50, base list-filter-validation
+    (#29).\nContents: write_to_branch/delete_from_branch commit `-- <path>` only;
+    snapshot_path + rollback_path undo a failed add/commit exactly (file + stage-0
+    index entry), and refuse an unreadable target before any change; merge() skips
+    when origin is already an ancestor, tries `merge --ff-only` past unrelated staged
+    leftovers, names staged leftovers and gives the commands to clear them, and passes
+    git's reason through when a merge never started.\nReview: rounds 1-4 fixed. Codex
+    round 5 (delta 835daaf..f392d50) left ONE IMPORTANT, still open:\n  - lib/git.ml
+    snapshot_path/rollback_path save only dereferenced contents. Rollback recreates
+    a regular 0600 file, losing symlink identity, file mode and hard-link identity.
+    Codex reproduced a failed commit turning a symlink target into a regular file.
+    Fix idea: lstat in the snapshot; for a symlink record readlink and restore with
+    Unix.symlink; for a regular file restore the mode (and refuse, or skip content
+    restore, when st_nlink > 1). Add tests.\nClaude round 5 was interrupted: re-run
+    Claude on the fix delta together with the fix above.\nNext: fix the Important,
+    run a convergence round on the new delta, then merge after #29 (see ci-actions-disabled)."
