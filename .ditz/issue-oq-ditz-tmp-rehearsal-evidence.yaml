@@ -15,3 +15,12 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-26T19:43:53-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'The only copy of the E4 migration rehearsal input lives at /tmp/chaos-gt4l2-rehearsal.WxkAIb/
+    (mode 700; contains bd-export.jsonl at 604KB, import1.json, import2.json, id_rename_map.json,
+    replay_comments.py, clone1/, clone2/, mirror.git/ -- this is real chaos organizational
+    content). It will not survive a reboot. Options: copy it somewhere durable, or
+    deliberately let it be discarded. Recommendation: none stated by the source session;
+    flagged as Ted''s call. Decides: Ted. Source: off-duty/waiting/2026-09-26-eb50d85c-ditz-import-fidelity-plan.md.'
