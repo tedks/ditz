@@ -15,3 +15,22 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-09-26T19:43:47-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'The project root /home/tedks/Projects/ditz contains two overlapping git
+    repositories: Repo A (canonical, GIT_DIR=/home/tedks/Projects/ditz, owns master/edge/ditz-metadata
+    and the master + .ditz-worktree worktrees, remote origin git@github.com:tedks/ditz.git
+    -- all real work belongs here) and Repo B (legacy, GIT_DIR=/home/tedks/Projects/ditz/.git,
+    working tree at the project root itself, branch fix-git-root-detection, no origin
+    remote, owns stray worktrees ditz-epic1/epic2/epic3/import-fidelity). A bare git
+    command run at the project root silently targets the legacy Repo B. Nothing is
+    stranded: fix-git-root-detection''s content is already in master via 89f5ea5,
+    and import-fidelity equals origin/import-fidelity at a4534f5. A separate closed
+    session (off-duty/waiting/2026-09-26-742ef9f8-ditz-the-skeptical-one.md) found
+    a stray leftover checkout under this same confusion that broke ditz sync, and
+    asked Ted to remove it by hand with two rm commands rather than doing it itself;
+    verify whether that removal happened before assuming ditz sync works from every
+    directory here. Options: leave Repo B alone (recommended default), or untangle
+    the overlap in a separate pass. Decides: Ted. Source: off-duty/waiting/2026-09-26-eb50d85c-ditz-import-fidelity-plan.md,
+    off-duty/waiting/2026-09-26-742ef9f8-ditz-the-skeptical-one.md.'
