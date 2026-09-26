@@ -1,0 +1,17 @@
+id: oq-ditz-repo-overlap-cleanup
+title: 'Q: Untangle the two overlapping git repositories at /home/tedks/Projects/ditz,
+  or leave the legacy one alone?'
+desc: ""
+type: task
+component: open-questions
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-09-26T19:43:47-00:00
+references: []
+log_events:
+- time: 2026-09-26T19:43:47-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
