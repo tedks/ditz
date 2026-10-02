@@ -486,6 +486,83 @@ let issue_file_occupant dir id =
   | GitBranch -> GitBackend.issue_file_occupant id
   | Filesystem d -> FS.issue_file_occupant (if dir = default_issue_dir then d else dir) id
 
+(** Serialize writers on one tracker.
+
+    Every mutating command is read-modify-write: load the issue, change it,
+    save it, commit it. Two at once lost updates (both read the same version;
+    the later save drops the other's comment or status), raced creates of the
+    same --id, and collided on the metadata worktree's git index ("index.lock:
+    File exists" -- 4 failures from 3 parallel agents in one pairmarket
+    session). A tracker-wide lock held for the whole command makes those
+    sequential; readers don't take it (they read committed state).
+
+    POSIX record lock (lockf) on a file in the git common dir (shared by every
+    worktree of the repository) or, on the filesystem backend, in the issue
+    directory. The kernel releases it when the process exits, however it
+    exits, so a crashed ditz can never leave a stale lock. Acquisition polls
+    for up to DITZ_LOCK_TIMEOUT seconds (default 30) and then fails with a
+    retry hint instead of hanging. No tracker yet (nothing to lock): runs
+    [f] unlocked. *)
+let write_lock_path issue_dir =
+  match detect_backend () with
+  | GitBranch ->
+    (match Git.find_common_git_dir () with
+     | Some d -> Some (Filename.concat d "ditz-write.lock")
+     | None -> None)
+  | Filesystem _ ->
+    if Sys.file_exists issue_dir && Sys.is_directory issue_dir then
+      let dir =
+        try Unix.realpath issue_dir
+        with Unix.Unix_error _ ->
+          if Filename.is_relative issue_dir then Filename.concat (Sys.getcwd ()) issue_dir
+          else issue_dir
+      in
+      Some (Filename.concat dir ".ditz-write.lock")
+    else None
+
+let lock_timeout () =
+  match Option.bind (Sys.getenv_opt "DITZ_LOCK_TIMEOUT") float_of_string_opt with
+  | Some t when t >= 0. -> t
+  | _ -> 30.
+
+let with_write_lock ?(issue_dir = default_issue_dir) f =
+  match write_lock_path issue_dir with
+  | None -> Ok (f ())
+  | Some path ->
+    if Sys.getenv_opt "DITZ_WRITE_LOCK_HELD" = Some path then
+      Error (`Msg (Printf.sprintf "ditz write lock reentry on %s (a hook invoked ditz while another command is writing)" path))
+    else
+    match Unix.openfile path [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o644 with
+    | exception Unix.Unix_error (e, _, _) ->
+      Error (`Msg (Printf.sprintf "cannot open the write lock %s: %s" path (Unix.error_message e)))
+    | fd ->
+      let timeout = lock_timeout () in
+      let deadline = Unix.gettimeofday () +. timeout in
+      let rec acquire () =
+        match Unix.lockf fd Unix.F_TLOCK 0 with
+        | () -> Ok ()
+        | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES | Unix.EWOULDBLOCK | Unix.EINTR), _, _) ->
+          if Unix.gettimeofday () >= deadline then
+            Error (`Msg (Printf.sprintf
+              "another ditz command is still writing to this tracker (waited %gs \
+               for %s); retry, or set DITZ_LOCK_TIMEOUT to wait longer" timeout path))
+          else (Unix.sleepf 0.05; acquire ())
+        | exception Unix.Unix_error (e, _, _) ->
+          Error (`Msg (Printf.sprintf "cannot take the write lock %s: %s" path (Unix.error_message e)))
+      in
+      match acquire () with
+      | Error _ as e -> Unix.close fd; e
+      | Ok () ->
+        let previous = Sys.getenv_opt "DITZ_WRITE_LOCK_HELD" in
+        Unix.putenv "DITZ_WRITE_LOCK_HELD" path;
+        Fun.protect
+          ~finally:(fun () ->
+            (match previous with
+             | Some value -> Unix.putenv "DITZ_WRITE_LOCK_HELD" value
+             | None -> Unix.putenv "DITZ_WRITE_LOCK_HELD" "");
+            Unix.close fd)
+          (fun () -> Ok (f ()))
+
 (** Check which backend is currently active *)
 let current_backend () = detect_backend ()
 
