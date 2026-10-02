@@ -11,7 +11,7 @@ type: feature
 component: sync
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: paused
+status: in_progress
 disposition:
 creation_time: 2026-09-14T23:48:30-00:00
 references: []
@@ -59,6 +59,10 @@ log_events:
 - time: 2026-09-16T23:40:59-00:00
   who: Ted Smith
   what: blocks write-lock-recheck
+  comment: ""
+- time: 2026-10-02T05:54:25-00:00
+  who: Ted Smith
+  what: started
   comment: ""
 blocks:
 - write-lock-recheck
