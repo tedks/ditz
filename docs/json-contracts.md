@@ -171,6 +171,9 @@ an onboarding refusal/failure does not make `init` exit nonzero. Inspect this
 field separately if installing instructions is required.
 
 `onboard.onboarding` is `wrote`, `already-present`, `refused-symlink`, or `failed`.
+Explicit `onboard --refresh` retains these outcomes: replacing a recognized old
+block is `wrote`, a current block is `already-present`, and an edited or malformed
+block is `failed`. See [Updating agent instructions](onboarding.md).
 The standalone command exits `1` for `failed`, but `refused-symlink` currently
 exits `0`. Its `path` is the actual destination when resolved successfully,
 otherwise the requested path. A success status alone does not prove a block was

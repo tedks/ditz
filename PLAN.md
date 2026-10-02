@@ -39,7 +39,9 @@ as proposals until implemented.
 Structured output exists across the command surface, but mutation response
 shapes differ. Accepting `--json` is not a promise that every write returns the
 complete resulting issue. The usage study proposes a separate opt-in contract;
-that proposal is not implemented.
+that proposal is not implemented. The current command-by-command behavior is
+documented in [JSON results and retries](docs/json-contracts.md)
+([PR #37](https://github.com/tedks/ditz/pull/37)).
 
 ## Safety and feedback work completed on 2026-10-02
 
