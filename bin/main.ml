@@ -156,13 +156,16 @@ let add_cmd =
                       overwrite it. Repair or remove it in a checkout of \
                       ditz-metadata and commit that, or use a different --id."
                       path read_err
-                  | Uncommitted { path; rel; worktree; staged } ->
+                  | Uncommitted { path; rel; worktree; staged; on_disk } ->
                     (* A staged file must be unstaged too: deleted but still
                        in the index, it would be committed by a later write. *)
                     let keep, discard =
                       if staged then
-                        (Printf.sprintf "git -C %s commit -m <msg> -- %s"
-                           (Filename.quote worktree) rel,
+                        ((if on_disk then "" else
+                            Printf.sprintf "git -C %s restore --worktree -- %s && "
+                              (Filename.quote worktree) rel) ^
+                           Printf.sprintf "git -C %s commit -m <msg> -- %s"
+                             (Filename.quote worktree) rel,
                          Printf.sprintf "git -C %s rm -f -- %s"
                            (Filename.quote worktree) rel)
                       else

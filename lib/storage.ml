@@ -14,7 +14,7 @@ let default_issue_dir = ".ditz"
 type occupant =
   | On_disk of string       (** filesystem backend: the file's path *)
   | Committed of string     (** git backend: path on the ditz-metadata branch *)
-  | Uncommitted of { path : string; rel : string; worktree : string; staged : bool }
+  | Uncommitted of { path : string; rel : string; worktree : string; staged : bool; on_disk : bool }
       (** git backend: an entry in the metadata worktree that is not on the
           branch. [staged]: it is in the worktree's index (typically a write
           whose commit failed), so deleting the file alone would still leave
@@ -339,23 +339,23 @@ module GitBackend = struct
           | None -> Error (`Msg "Not in a git repository")
           | Some wt ->
             let full = Filename.concat wt rel in
-            (match Fs_util.entry_exists full with
-             | Error _ as e -> e
-             | Ok false -> Ok None
-             | Ok true ->
-               (* Staged? git pathspecs match case-sensitively even with
-                  core.ignorecase, so find the index's own spelling and use it
-                  in the remedy commands. *)
+            (* The index can hold the only copy after the working file was
+               deleted. Inspect it independently, and fail closed on errors. *)
+            (match Git.git ~cwd:wt ["ls-files"; "--"; ".ditz"] with
+             | Error (`Msg e) -> Error (`Msg ("Cannot inspect metadata index: " ^ e))
+             | Ok out ->
                let index_rel =
-                 match Git.git ~cwd:wt ["ls-files"; "--"; ".ditz"] with
-                 | Ok out ->
-                   find_spelling (List.filter (fun l -> l <> "")
-                                    (List.map String.trim (String.split_on_char '\n' out)))
-                 | Error _ -> None
+                 find_spelling (List.filter (fun l -> l <> "")
+                                  (List.map String.trim (String.split_on_char '\n' out)))
                in
-               let staged = index_rel <> None in
-               let rel = Option.value index_rel ~default:rel in
-               Ok (Some (Uncommitted { path = full; rel; worktree = wt; staged })))
+               match Fs_util.entry_exists full with
+               | Error _ as e -> e
+               | Ok on_disk ->
+                 let staged = index_rel <> None in
+                 if not on_disk && not staged then Ok None
+                 else
+                   let rel = Option.value index_rel ~default:rel in
+                   Ok (Some (Uncommitted { path = full; rel; worktree = wt; staged; on_disk })))
 end
 
 (* Public API - dispatches to appropriate backend *)

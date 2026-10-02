@@ -350,6 +350,33 @@ contains "child blocks its parent" '"blocks":["epic-p"]' "$("$BIN" show kid-a --
 contains "parent is blocked by its child" '"blocked_by":["kid-a"]' "$("$BIN" show epic-p --json)"
 contains "acceptance_criteria folded into desc" "Acceptance: the bar is met" "$("$BIN" show kid-a)"
 
+# A staged-only issue is still precious data: absence from the working tree
+# must not let add replace the index's only copy.
+mkdir "$work/index-only-repo"
+cd "$work/index-only-repo"
+git init -q && git config user.email cli@test.local && git config user.name "CLI Test" \
+  && git commit -q --allow-empty -m init
+"$BIN" init --no-onboarding >/dev/null 2>&1
+"$BIN" add "Establish worktree" --id establish >/dev/null
+meta="$PWD/.ditz-worktree"
+printf 'precious staged-only content\n' > "$meta/.ditz/issue-indexonly.yaml"
+git -C "$meta" add -- .ditz/issue-indexonly.yaml
+staged_before="$(git -C "$meta" rev-parse :.ditz/issue-indexonly.yaml)"
+rm "$meta/.ditz/issue-indexonly.yaml"
+out="$("$BIN" add "Replacement" --id indexonly 2>&1)"; check "staged-only issue refused" 1 "$?"
+contains "staged-only keep remedy restores index first" 'restore --worktree -- .ditz/issue-indexonly.yaml' "$out"
+check "staged-only blob preserved" "$staged_before" "$(git -C "$meta" rev-parse :.ditz/issue-indexonly.yaml)"
+if [ ! -e "$meta/.ditz/issue-indexonly.yaml" ]; then echo "ok: staged-only working path remains absent"
+else echo "FAIL: staged-only working path recreated"; fail=1; fi
+# An unreadable index must not turn an unknown occupant into an absent one.
+index_path="$(git -C "$meta" rev-parse --git-path index)"
+cp "$index_path" "$work/saved-index"
+printf 'invalid index\n' > "$index_path"
+out="$("$BIN" add "Unknown" --id unknownindex 2>&1)"; check "bad index refuses add" 1 "$?"
+contains "bad index names inspection failure" 'Cannot inspect metadata index' "$out"
+cp "$work/saved-index" "$index_path"
+cd "$work"
+
 # add --id must never create over an issue file it cannot read. The exact-id
 # lookup fails for "unparseable" as well as "absent", and treating both as
 # absent saved the new issue straight over the old file, exit 0. (Last in the
