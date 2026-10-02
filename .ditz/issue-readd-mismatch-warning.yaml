@@ -19,3 +19,11 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-10-02T05:57:09-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Investigation preserves named-add no-op semantics and existing mismatch
+    proposal. Optional future result contract Q1 can expose mismatched fields but
+    must report stdin-not-read when early-return re-add has not consumed it; do not
+    claim input equality or switch to upsert. No new ID scheme required. Evidence
+    report: https://github.com/tedks/ditz/pull/34.'
