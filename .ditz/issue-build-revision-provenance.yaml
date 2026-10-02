@@ -1,0 +1,22 @@
+id: build-revision-provenance
+title: Expose installed ditz build revision and installation provenance
+desc: Deferred from October2 agent ergonomics follow-on, not implemented. Current
+  --version is hardcoded0.1.0-ocaml, so agents cannot distinguish newer source behavior
+  from a stale installed binary using version alone. Propose build revision/provenance
+  and a documented pinned installation workflow. Determine stable output/fallback
+  behavior before implementation; preserve reproducible Nix builds. Existing docs
+  require comparing installed command help with source. No release/deployment authorized
+  by this issue.
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T06:34:56-00:00
+references: []
+log_events:
+- time: 2026-10-02T06:34:56-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
