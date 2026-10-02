@@ -18,8 +18,8 @@ type: task
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-10-02T05:57:07-00:00
 references: []
 log_events:
@@ -37,3 +37,11 @@ log_events:
   comment: Assigned by root to native /root/agent_recipes; isolated documentation-only
     branch and synthetic recipe validation. Existing implementation lane active; do
     not duplicate.
+- time: 2026-10-02T06:11:15-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'PR #35 merged 2951a1618e1c9b392d7e5fa227ed1841299b79fd from 26883859ec47a4a303b10ef7abcb7afc2d42f322.
+    Root light review clean, rebased range-diff patch identical, rebuilt/reran isolated
+    snippets atop safety source 8dd0739. Teaches current CLI recipes only. Separate
+    docs-json-result-and-retry-contracts remains followup; API questions remain unrulled.
+    Investigation report #34 merged f28c4b.'
