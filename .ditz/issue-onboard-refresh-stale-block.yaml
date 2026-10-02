@@ -22,3 +22,11 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-10-02T05:57:08-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Investigation G1/G3 adds discovery/ID-capture evidence. One caller performed
+    four preparatory interactions before creation, then listed/grepped titles to recover
+    the newly returned ID. Existing --ids-only suffices. Coordinate refresh decision
+    with #27 and recipe follow-up. No permission to overwrite policy files; preserve
+    sentinel/symlink safety and owner content. Evidence report: https://github.com/tedks/ditz/pull/34.'
