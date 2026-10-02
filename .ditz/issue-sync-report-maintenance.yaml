@@ -1,0 +1,21 @@
+id: sync-report-maintenance
+title: Simplify sync porcelain parsing and isolate locale tests
+desc: 'PR #31 Google council nits deferred: parse porcelain destination column directly
+  instead of manual substring search; tolerate future extra columns; restore locale
+  test environment in a subprocess rather than representing absent values as empty.
+  Current successful porcelain contract has three columns, ref input is fixed hexadecimal
+  SHA, and Git/gettext treat empty locale overrides as unset; no current correctness
+  failure. Follow-up cleanup should retain actual-Git integration coverage.'
+type: task
+component: git
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:50:32-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:50:32-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
