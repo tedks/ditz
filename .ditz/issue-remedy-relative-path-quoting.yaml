@@ -1,0 +1,19 @@
+id: remedy-relative-path-quoting
+title: Quote relative paths consistently in add refusal remedies
+desc: 'PR #28 Google council nit: wrap the generated relative path in Filename.quote
+  for defensive consistency. Deferred because validate_id restricts ASCII letters/digits/hyphen/underscore
+  and generated .ditz/issue-<id>.yaml has no shell metacharacters; no current injection
+  or correctness bug. Existing worktree path is already quoted.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:49:56-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:49:56-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
