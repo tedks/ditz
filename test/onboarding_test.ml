@@ -116,4 +116,60 @@ let () =
   assert (Sys.is_directory asdir);
   print_endline "PASS: refuses directory path";
 
+  let put path content =
+    let oc = open_out_bin path in output_string oc content; close_out oc
+  in
+  let refresh path = Onboarding.refresh ~within:(Some dir) ~path in
+  let prefix = "# Policy\nUnicode: λ.\n\n" and suffix = "\n\n# More policy\nkeep this" in
+  let refreshed = prefix ^ Onboarding.block Onboarding.snippet ^ suffix in
+  List.iteri (fun i old ->
+    let original = prefix ^ Onboarding.block old ^ suffix in
+    put agents original;
+    assert (is_skipped (Onboarding.install ~within:(Some dir) ~path:agents));
+    assert (read agents = original);
+    assert (is_wrote (refresh agents));
+    assert (read agents = refreshed);
+    let inode = (Unix.stat agents).Unix.st_ino in
+    assert (is_skipped (refresh agents));
+    assert ((Unix.stat agents).Unix.st_ino = inode);
+    assert (read agents = refreshed);
+    Printf.printf "PASS: historical snippet %d refresh preserves surroundings and is idempotent\n" i
+  ) Onboarding.historical_snippets;
+  assert (Onboarding.contains Onboarding.snippet "https://github.com/tedks/ditz/blob/master/FORMAT.md");
+  let old = Onboarding.block (List.hd Onboarding.historical_snippets) in
+  let current = Onboarding.block Onboarding.snippet in
+  List.iter (fun malformed ->
+    put agents malformed;
+    let inode = (Unix.stat agents).Unix.st_ino in
+    (match refresh agents with Onboarding.Failed _ -> () | _ -> failwith "accepted unsafe refresh");
+    assert (read agents = malformed);
+    assert ((Unix.stat agents).Unix.st_ino = inode)
+  ) [Onboarding.marker_start; Onboarding.marker_end;
+     Onboarding.marker_end ^ "\n" ^ Onboarding.marker_start;
+     old ^ "\n" ^ old; current ^ "\n" ^ Onboarding.marker_start;
+     Onboarding.marker_start ^ "\nuser edits\n" ^ Onboarding.marker_end;
+     "inline " ^ old; old ^ " inline";
+     String.concat "\r\n" (String.split_on_char '\n' old)];
+  print_endline "PASS: edited, inline, CRLF, missing, reversed and duplicate blocks refuse without writing";
+  put target (prefix ^ old ^ suffix);
+  assert (is_wrote (refresh link));
+  assert (read target = refreshed);
+  assert ((Unix.lstat link).Unix.st_kind = Unix.S_LNK);
+  put ext_target old;
+  assert (refresh ext_link = Onboarding.Refused_symlink);
+  assert (read ext_target = old);
+  assert (Onboarding.refresh ~within:None ~path:link = Onboarding.Refused_symlink);
+  let dangling = Filename.concat dir "DANGLING.md" in
+  Unix.symlink "missing.md" dangling;
+  assert (refresh dangling = Onboarding.Refused_symlink);
+  assert ((Unix.lstat dangling).Unix.st_kind = Unix.S_LNK);
+  print_endline "PASS: refresh retains internal, external, contextless and dangling symlink boundaries";
+  let fresh = Filename.concat dir "FRESH.md" in
+  assert (is_wrote (refresh fresh));
+  assert (read fresh = current ^ "\n");
+  put fresh "policy without markers";
+  assert (is_wrote (refresh fresh));
+  assert (read fresh = "policy without markers\n" ^ current ^ "\n");
+  print_endline "PASS: refresh without markers installs normally";
+
   print_endline "\nAll onboarding tests passed!"

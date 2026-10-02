@@ -195,9 +195,11 @@ sync configuration API to assume.
 ### Onboarding
 
 `init` and `onboard` append a marked block without replacing unrelated policy.
-An existing block is skipped. PR #20 permits following an in-repository symlink
-to its target while refusing an external target; the old blanket symlink refusal
-is obsolete. Refreshing an existing stale block remains an open design item.
+An existing block is skipped by default. Explicit `onboard --refresh` replaces
+only a recognized, unchanged generated block and refuses edited or malformed
+blocks. PR #20 permits following an in-repository symlink to its target while
+refusing an external target; the old blanket symlink refusal is obsolete. See
+[onboarding refresh](docs/onboarding.md) for exact recognition and output rules.
 
 ### Import limits
 
