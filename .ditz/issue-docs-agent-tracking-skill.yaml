@@ -11,8 +11,8 @@ type: task
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-10-02T06:30:40-00:00
 references: []
 log_events:
@@ -24,3 +24,12 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T06:38:49-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'Merged dotfiles PR #169 atbee8ebee2892d8e1d03da42980e6f9e437390154. Corrected
+    scaffold and canonical repo guidance; shared issue-tracking skill links published
+    recipes/JSON contract. Independent light review and skill validation passed; installer35/35.
+    Three paired evaluations10/12 evidenced each, actual disposable stored-state/recovery/sync
+    outcomes verified, no efficacy advantage established. Activation tracked separately
+    in rollout-agent-tracking-skill.'
