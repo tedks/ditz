@@ -503,14 +503,21 @@ let issue_file_occupant dir id =
     for up to DITZ_LOCK_TIMEOUT seconds (default 30) and then fails with a
     retry hint instead of hanging. No tracker yet (nothing to lock): runs
     [f] unlocked. *)
-let write_lock_path () =
+let write_lock_path issue_dir =
   match detect_backend () with
   | GitBranch ->
     (match Git.find_common_git_dir () with
      | Some d -> Some (Filename.concat d "ditz-write.lock")
      | None -> None)
-  | Filesystem d ->
-    if Sys.file_exists d && Sys.is_directory d then Some (Filename.concat d ".ditz-write.lock")
+  | Filesystem _ ->
+    if Sys.file_exists issue_dir && Sys.is_directory issue_dir then
+      let dir =
+        try Unix.realpath issue_dir
+        with Unix.Unix_error _ ->
+          if Filename.is_relative issue_dir then Filename.concat (Sys.getcwd ()) issue_dir
+          else issue_dir
+      in
+      Some (Filename.concat dir ".ditz-write.lock")
     else None
 
 let lock_timeout () =
@@ -518,10 +525,13 @@ let lock_timeout () =
   | Some t when t >= 0. -> t
   | _ -> 30.
 
-let with_write_lock f =
-  match write_lock_path () with
+let with_write_lock ?(issue_dir = default_issue_dir) f =
+  match write_lock_path issue_dir with
   | None -> Ok (f ())
   | Some path ->
+    if Sys.getenv_opt "DITZ_WRITE_LOCK_HELD" = Some path then
+      Error (`Msg (Printf.sprintf "ditz write lock reentry on %s (a hook invoked ditz while another command is writing)" path))
+    else
     match Unix.openfile path [Unix.O_RDWR; Unix.O_CREAT; Unix.O_CLOEXEC] 0o644 with
     | exception Unix.Unix_error (e, _, _) ->
       Error (`Msg (Printf.sprintf "cannot open the write lock %s: %s" path (Unix.error_message e)))
@@ -542,7 +552,16 @@ let with_write_lock f =
       in
       match acquire () with
       | Error _ as e -> Unix.close fd; e
-      | Ok () -> Fun.protect ~finally:(fun () -> Unix.close fd) (fun () -> Ok (f ()))
+      | Ok () ->
+        let previous = Sys.getenv_opt "DITZ_WRITE_LOCK_HELD" in
+        Unix.putenv "DITZ_WRITE_LOCK_HELD" path;
+        Fun.protect
+          ~finally:(fun () ->
+            (match previous with
+             | Some value -> Unix.putenv "DITZ_WRITE_LOCK_HELD" value
+             | None -> Unix.putenv "DITZ_WRITE_LOCK_HELD" "");
+            Unix.close fd)
+          (fun () -> Ok (f ()))
 
 (** Check which backend is currently active *)
 let current_backend () = detect_backend ()

@@ -22,7 +22,11 @@ worktree at `<repo>/.ditz-worktree` (reused across commands; set
 - Writers take turns: each mutating command holds a tracker-wide lock
   (`ditz-write.lock` in the git directory) from its read to its commit, so
   parallel agents don't lose each other's updates. A waiting command gives up
-  after `DITZ_LOCK_TIMEOUT` seconds (default 30); readers never wait.
+  after `DITZ_LOCK_TIMEOUT` seconds (default 30); readers never wait. On the
+  filesystem backend, the lock is `.ditz-write.lock` in the configured issue
+  directory. Input from stdin is read before the lock; the command then checks
+  current issue state under the lock. A git hook that runs another ditz writer
+  for the same tracker gets a reentry error instead of waiting on its parent.
 - `ditz sync` fetches, merges, and pushes that branch. Merges auto-resolve:
   log_events union, status+disposition by last-write-wins, reference lists by
   three-way merge (no resurrection of deleted edges). Only when both sides

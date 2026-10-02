@@ -35,7 +35,18 @@ module StringSet = Set.Make(String)
    so concurrent ditz writers take turns instead of losing each other's updates.
    The lock covers the whole command: the read it modifies AND the commit. *)
 let with_lock body =
-  match Ditz.Storage.with_write_lock body with
+  let initial_dir =
+    match Ditz.Storage.load_config () with
+    | Ok config -> config.issue_dir
+    | Error _ -> Ditz.Storage.default_issue_dir
+  in
+  let checked_body () =
+    match Ditz.Storage.load_config () with
+    | Ok config when config.issue_dir <> initial_dir ->
+      Fmt.epr "Error: issue directory changed while waiting for the write lock; retry@."; 1
+    | _ -> body ()
+  in
+  match Ditz.Storage.with_write_lock ~issue_dir:initial_dir checked_body with
   | Ok code -> code
   | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
 
@@ -169,7 +180,16 @@ let add_cmd =
   let component_opt = Arg.(value & opt (some string) None & info ["component"; "c"] ~docv:"COMPONENT" ~doc:"Component (default \"default\")") in
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
-  let run title custom_id type_str component desc desc_stdin json quiet () = with_lock @@ fun () ->
+  let run title custom_id type_str component desc desc_stdin json quiet () =
+    (* A no-op re-add keeps its historical behavior of never reading stdin.
+       Recheck under the lock below: another writer may create the id while
+       this command reads its description. *)
+    let already_exists = match custom_id, Ditz.Storage.load_config () with
+      | Some id, Ok config -> Result.is_ok (Ditz.Storage.find_issue_by_exact_id config.issue_dir id)
+      | _ -> false
+    in
+    let stdin_desc = if desc_stdin && desc = None && not already_exists then Some (read_stdin ()) else None in
+    with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -247,11 +267,13 @@ let add_cmd =
            Fmt.pr "Issue %s already exists; nothing changed (use 'ditz set %s' to edit it)@."
              existing.id existing.id);
         0
+      | Ok None when already_exists && desc_stdin && desc = None ->
+        Fmt.epr "Error: issue disappeared while waiting for the write lock; retry with --desc-stdin@."; 1
       | Ok None ->
         (* Creating: now resolve description and validate creation-only fields. *)
         let desc = match (desc, desc_stdin) with
           | (Some d, false) -> d
-          | (None, true) -> read_stdin ()
+          | (None, true) -> Option.value stdin_desc ~default:""
           | (Some d, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; d
           | (None, false) -> ""
         in
@@ -772,7 +794,9 @@ let comment_cmd =
   let id_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"ID" ~doc:"Issue ID (or prefix)") in
   let comment_arg = Arg.(value & pos 1 (some string) None & info [] ~docv:"COMMENT" ~doc:"Comment text (or use --stdin)") in
   let stdin_flag = Arg.(value & flag & info ["stdin"] ~doc:"Read comment from stdin") in
-  let run id comment_text use_stdin json quiet () = with_lock @@ fun () ->
+  let run id comment_text use_stdin json quiet () =
+    let stdin_comment = if use_stdin && comment_text = None then Some (read_stdin ()) else None in
+    with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -780,7 +804,7 @@ let comment_cmd =
     | Ok config ->
       let comment = match (comment_text, use_stdin) with
         | (Some c, false) -> c
-        | (None, true) -> read_stdin ()
+        | (None, true) -> Option.value stdin_comment ~default:""
         | (Some _, true) ->
           Fmt.epr "Error: cannot use both comment argument and --stdin@."; ""
         | (None, false) ->
@@ -1055,7 +1079,9 @@ let set_cmd =
   let desc_opt = Arg.(value & opt (some string) None & info ["desc"; "d"] ~docv:"DESC" ~doc:"Set description") in
   let desc_stdin_flag = Arg.(value & flag & info ["desc-stdin"] ~doc:"Read description from stdin") in
   let status_opt = Arg.(value & opt (some string) None & info ["status"; "s"] ~docv:"STATUS" ~doc:"Set status (unstarted, in_progress, paused)") in
-  let run id type_str component title desc desc_stdin status_str json quiet () = with_lock @@ fun () ->
+  let run id type_str component title desc desc_stdin status_str json quiet () =
+    let stdin_desc = if desc_stdin && desc = None then Some (read_stdin ()) else None in
+    with_lock @@ fun () ->
     let mode = output_mode json quiet in
     match Ditz.Storage.load_config () with
     | Error (`Msg e) ->
@@ -1108,7 +1134,7 @@ let set_cmd =
         in
         let issue = match (desc, desc_stdin) with
           | (Some d, false) -> Ditz.Issue_ops.set_desc issue ~desc:d ~who:config.name
-          | (None, true) -> Ditz.Issue_ops.set_desc issue ~desc:(read_stdin ()) ~who:config.name
+          | (None, true) -> Ditz.Issue_ops.set_desc issue ~desc:(Option.value stdin_desc ~default:"") ~who:config.name
           | (Some _, true) -> Fmt.epr "Warning: ignoring --desc-stdin since --desc provided@."; issue
           | (None, false) -> issue
         in
@@ -1375,7 +1401,14 @@ let import_cmd =
   let info = Cmd.info "import" ~doc ~man in
   let file_arg = Arg.(value & pos 0 (some string) None & info [] ~docv:"FILE" ~doc:"JSONL file ('-' or omitted = stdin)") in
   let format_opt = Arg.(value & opt string "beads" & info ["format"] ~docv:"FMT" ~doc:"Source format (only 'beads' supported)") in
-  let run file format json quiet () = with_lock @@ fun () ->
+  let run file format json quiet () =
+    let input = if format = "beads" then
+      match file with
+      | None | Some "-" -> Some (read_stdin ())
+      | Some path -> Some (try Ditz.Fs_util.read_file path
+          with Sys_error e -> Fmt.epr "Error reading %s: %s@." path e; exit 1)
+    else None in
+    with_lock @@ fun () ->
     let mode = output_mode json quiet in
     if format <> "beads" then begin
       Fmt.epr "Error: unknown import format '%s' (only 'beads' is supported)@." format; 1
@@ -1384,13 +1417,7 @@ let import_cmd =
     | Error (`Msg e) -> Fmt.epr "Error: %s@." e; 1
     | Ok config ->
       (* Read JSONL from the file or stdin. *)
-      let text =
-        match file with
-        | None | Some "-" -> read_stdin ()
-        | Some path ->
-          (try Ditz.Fs_util.read_file path
-           with Sys_error e -> Fmt.epr "Error reading %s: %s@." path e; exit 1)
-      in
+      let text = Option.value input ~default:"" in
       let beads, parse_warns = Ditz.Import_beads.parse_jsonl text in
       let valid id = Result.is_ok (Ditz.Storage.validate_id id) in
       (* An import is incremental, not a fresh world: the tracker already holds

@@ -490,6 +490,28 @@ check "parallel comments all succeed (filesystem)" 0 "$rcs"
 check "parallel comments all recorded (filesystem)" 12 \
   "$("$BIN" show conc --json | grep -o '"what":"commented"' | wc -l | tr -d ' ')"
 
+# Hold stdin open after the command has entered a pipe read. Another writer
+# must make progress during that wait; the first command reloads the issue
+# under the lock after EOF and retains both comments.
+if [ -r /proc/self/wchan ]; then
+  mkfifo "$work/comment-input"
+  "$BIN" comment conc --stdin < "$work/comment-input" > "$work/stdin-result" 2>&1 & reader=$!
+  exec 3> "$work/comment-input"
+  waiting=0
+  for i in $(seq 1 200); do
+    case "$(cat "/proc/$reader/wchan" 2>/dev/null)" in *pipe*read*) waiting=1; break;; esac
+    sleep 0.01
+  done
+  check "stdin command reached pipe read" 1 "$waiting"
+  DITZ_LOCK_TIMEOUT=0 "$BIN" comment conc "while stdin waits" >/dev/null 2>&1
+  check "another writer advances while stdin is open" 0 "$?"
+  printf 'from stdin\n' >&3
+  exec 3>&-
+  wait "$reader"; check "stdin writer completes after EOF" 0 "$?"
+  contains "both comments survive stdin wait" "while stdin waits" "$("$BIN" show conc)"
+  contains "stdin comment survives" "from stdin" "$("$BIN" show conc)"
+fi
+
 g="$work/gitrepo"; mkdir "$g"; cd "$g"
 git init -q && git config user.email cli@test.local && git config user.name "CLI Test" \
   && git commit -q --allow-empty -m init
@@ -503,7 +525,35 @@ check "parallel comments all recorded (git backend)" 10 \
   "$("$BIN" show gconc --json | grep -o '"what":"commented"' | wc -l | tr -d ' ')"
 wt="$(git worktree list | awk '/ditz-metadata/{print $1}')"
 check "no leftovers staged in the metadata worktree" "" "$(git -C "$wt" diff --cached --name-only)"
+
+# A pre-commit hook runs under the parent writer's lock. Its own ditz write
+# must fail promptly with a reentry message so the parent can finish.
+mkdir hooks
+cat > hooks/pre-commit <<'HOOK'
+#!/bin/sh
+DITZ_LOCK_TIMEOUT=0 "$DITZ_TEST_BIN" comment gconc "from hook" > "$DITZ_TEST_HOOK_RESULT" 2>&1
+test "$?" -eq 1
+HOOK
+chmod +x hooks/pre-commit
+export DITZ_TEST_BIN="$BIN" DITZ_TEST_HOOK_RESULT="$g/hook-result"
+git config core.hooksPath "$g/hooks"
+"$BIN" comment gconc "outer hook test" >/dev/null 2>&1
+check "outer write survives a hook's nested ditz attempt" 0 "$?"
+contains "nested hook write reports reentry" "reentry" "$(cat "$DITZ_TEST_HOOK_RESULT")"
+git config --unset core.hooksPath
 cd "$work"
+
+# A custom filesystem issue_dir needs the lock beside its own issues.
+mkdir custom-issues
+cat > "$HOME/.ditz-config" <<'YAML'
+name: CLI Test
+email: cli@test.local
+issue_dir: custom-issues
+YAML
+"$BIN" add "Custom tracker" --id custom1 --ids-only >/dev/null
+check "custom issue directory receives issue" 0 "$?"
+check "custom issue directory receives lock" 0 "$(test -f custom-issues/.ditz-write.lock; echo $?)"
+check "custom issue file written" 0 "$(test -f custom-issues/issue-custom1.yaml; echo $?)"
 
 if [ "$fail" = 0 ]; then echo "All CLI smoke tests passed"; else echo "CLI smoke tests FAILED"; fi
 exit "$fail"
