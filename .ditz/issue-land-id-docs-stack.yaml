@@ -26,8 +26,8 @@ type: task
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-16T23:40:57-00:00
 references: []
 log_events:
@@ -58,5 +58,11 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T05:54:24-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'PR #28 merged 8e252ea after index-only occupant fix and CLEAN native+Google
+    convergence, exact-head Nix gates. PR #27 merged 08eb430 after clean rebase/light
+    review and full local gates. Anthropic unavailable credits; recorded PR evidence.'
 blocked_by:
 - ci-actions-disabled
