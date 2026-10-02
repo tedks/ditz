@@ -1,0 +1,26 @@
+id: oq-ergonomics-incomplete-read-policy
+title: 'Q: How should list/ready/count report an incomplete issue scan?'
+desc: 'Options: (A) warning and partial success, (B) nonzero result carrying explicit
+  partial data, (C) nonzero with no selection; an explicit partial-read escape hatch
+  can be considered separately. Recommend C for selection/count default, with compatibility
+  review before any change. Owner: Ted. Blocks: honest bounded selection/count semantics
+  (slice4), not current documentation publication. Evidence: source83dd20e FS.load_issues/load_issues_classified
+  warns/skips unreadable members; synthetic git fixture with three valid issues plus
+  one malformed issue yields three issues and exit0 with warning. No observed recent
+  user incident is claimed. Distinguish empty complete selection from unknown/incomplete
+  scan; do not silently change existing consumers. Acceptance: positive valid record
+  twin plus corrupt member, whole-directory unreadable, true empty tracker, JSON/stdout
+  policy, nonzero propagation. See report Q4. Evidence report: https://github.com/tedks/ditz/pull/34.'
+type: task
+component: open-questions
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:57:07-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:57:07-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
