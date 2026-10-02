@@ -1,0 +1,26 @@
+id: oq-ergonomics-tracker-discovery
+title: 'Q: Add a read-only tracker location result?'
+desc: 'Options: (A) document raw git/file recipes only, (B) add ditz where --json,
+  (C) broaden status into discovery/repair. Recommend B: resolved backend, accessible
+  issue_dir or null, branch/head, materialized worktree state and explicit no-network
+  provenance. No init/fetch/repair/worktree creation; unresolved ownership or unreadable
+  config fails distinctly from absent tracker. Normal git context selects repository;
+  this is not a guarantee to discover all nested/overlapping repositories. Owner:
+  Ted. Blocks: slice3. Evidence: G1 four preparatory interactions before create; existing
+  location documentation was not enough in that episode. Acceptance: filesystem configured
+  dir, git worktree/subdirectory, branch without checkout, cached remote-only ref,
+  missing/unreadable configuration, no mutations/network. Do not duplicate existing
+  repo-overlap cleanup question. See report Q2. Evidence report: https://github.com/tedks/ditz/pull/34.'
+type: task
+component: open-questions
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:57:07-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:57:07-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
