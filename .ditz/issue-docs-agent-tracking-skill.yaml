@@ -1,0 +1,22 @@
+id: docs-agent-tracking-skill
+title: Correct scaffold guidance and add a thin shared issue-tracking skill
+desc: 'Authorized infrastructure follow-on: correct initialize-repo scaffold and dotfiles
+  own instructions (installed binary, status versus ownership, named-create no-upsert,
+  partial results and sync). Add a thin shared issue-tracking skill linking canonical
+  ditz agent recipes and JSON/retry reference. Validate in paired with/without-skill
+  scenarios and disposable trackers. Dotfiles PR https://github.com/tedks/dotfiles/pull/169;
+  ditz JSON companion https://github.com/tedks/ditz/pull/37. No deployment or tracker
+  migration in this task.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T06:30:40-00:00
+references: []
+log_events:
+- time: 2026-10-02T06:30:40-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
