@@ -16,7 +16,7 @@ This project uses `ditz` (not beads). Issues are plain-text YAML on the
 
 The loop:
 - `ditz ready` — what to work on now (unblocked, ranked by how much each unblocks)
-- `ditz start <id>` — mark in progress
+- `ditz start <id>` — mark in progress; does not reserve or assign ownership
 - `ditz close <id> --reason "..."` — close with why (or `--wontfix` / `--reorg`)
 - `ditz reopen <id>` — revive a closed issue
 
@@ -45,7 +45,9 @@ Sync: `ditz sync` fetches/merges/pushes the metadata branch. See the
 [format reference](https://github.com/tedks/ditz/blob/master/FORMAT.md) for the
 file format and git model, and the
 [agent recipes](https://github.com/tedks/ditz/blob/master/docs/agent-recipes.md)
-for creation, retry, and recovery examples.
+for creation and recovery examples. The
+[JSON/retry contract](https://github.com/tedks/ditz/blob/master/docs/json-contracts.md)
+explains command results and safe retries.
 |ditz}
 
 (* Wrote/Skipped carry the file actually touched — which may be a symlink's
@@ -96,9 +98,13 @@ let block snippet = Printf.sprintf "%s\n%s\n%s" marker_start snippet marker_end
     refused. This retains the existing atomic-write and path-resolution model;
     it does not synchronize concurrent editors. *)
 let install_with_refresh ~refresh ~within ~path : outcome =
-  let write_block dest existing =
+  let write_block dest existing mode =
     let write content =
-      match Fs_util.write_file_atomic ~path:dest ~content with
+      let result = match refresh, mode with
+        | true, Some mode -> Fs_util.write_file_atomic_with_mode ~mode ~path:dest ~content
+        | _ -> Fs_util.write_file_atomic ~path:dest ~content
+      in
+      match result with
       | Ok () -> Wrote dest
       | Error (`Msg e) -> Failed e
     in
@@ -129,14 +135,14 @@ let install_with_refresh ~refresh ~within ~path : outcome =
   (* Append into a concrete (already de-symlinked) destination. *)
   let install_concrete dest =
     match (try Some (Unix.lstat dest) with Unix.Unix_error _ -> None) with
-    | None -> write_block dest ""   (* nothing there: create fresh *)
+    | None -> write_block dest "" None   (* nothing there: create fresh *)
     | Some st ->
       (match st.Unix.st_kind with
        | Unix.S_REG ->
          (* CRITICAL: an existing-but-unreadable file must NOT be treated as
             empty — that would atomically replace (destroy) it. Refuse instead. *)
          (match (try Some (Fs_util.read_file dest) with _ -> None) with
-          | Some existing -> write_block dest existing
+          | Some existing -> write_block dest existing (Some st.Unix.st_perm)
           | None -> Failed (dest ^ " exists but could not be read; left unchanged"))
        | Unix.S_LNK -> Refused_symlink   (* defensive; caller resolved already *)
        | _ -> Failed (dest ^ " is not a regular file; left unchanged"))

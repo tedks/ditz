@@ -31,6 +31,8 @@ let () =
   assert (Onboarding.contains Onboarding.snippet "`--id` IS the name");
   assert (Onboarding.contains Onboarding.snippet "changes NOTHING");
   assert (Onboarding.contains Onboarding.snippet "ditz set <id>");
+  assert (Onboarding.contains Onboarding.snippet "does not reserve or assign ownership");
+  assert (Onboarding.contains Onboarding.snippet "docs/json-contracts.md");
   print_endline "PASS: snippet documents --id naming and idempotency";
 
   (* idempotent: second install is a no-op (markers already present) *)
@@ -137,6 +139,14 @@ let () =
   ) Onboarding.historical_snippets;
   assert (Onboarding.contains Onboarding.snippet "https://github.com/tedks/ditz/blob/master/FORMAT.md");
   let old = Onboarding.block (List.hd Onboarding.historical_snippets) in
+  List.iter (fun mode ->
+    put agents (prefix ^ old ^ suffix);
+    Unix.chmod agents mode;
+    assert (is_wrote (refresh agents));
+    assert (read agents = refreshed);
+    assert ((Unix.stat agents).Unix.st_perm = mode)
+  ) [0o644; 0o640; 0o600; 0o755];
+  print_endline "PASS: refresh preserves existing file permissions";
   let current = Onboarding.block Onboarding.snippet in
   List.iter (fun malformed ->
     put agents malformed;
@@ -152,7 +162,9 @@ let () =
      String.concat "\r\n" (String.split_on_char '\n' old)];
   print_endline "PASS: edited, inline, CRLF, missing, reversed and duplicate blocks refuse without writing";
   put target (prefix ^ old ^ suffix);
+  Unix.chmod target 0o640;
   assert (is_wrote (refresh link));
+  assert ((Unix.stat target).Unix.st_perm = 0o640);
   assert (read target = refreshed);
   assert ((Unix.lstat link).Unix.st_kind = Unix.S_LNK);
   put ext_target old;

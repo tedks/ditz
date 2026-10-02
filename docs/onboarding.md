@@ -34,8 +34,9 @@ current snippet changes.
 `AGENTS.md` may point to another regular file inside the repository, such as
 `CLAUDE.md`. Onboarding updates that resolved target and preserves the symlink.
 External and dangling symlinks are refused, as are all symlinks without a
-repository context. Refresh uses the same atomic file replacement as ordinary
-onboarding (the written file gets mode `0600`); it does not coordinate with
+repository context. Refresh preserves an existing regular file's permission
+bits, setting them on the temporary file before atomic replacement; new files
+retain ordinary onboarding's `0600` creation mode. It does not coordinate with
 concurrent text editors or protect against concurrent path replacement.
 
 `--json` keeps the existing `{ "path": "...", "onboarding": "..." }` shape:
