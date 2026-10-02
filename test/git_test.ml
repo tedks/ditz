@@ -274,6 +274,62 @@ let test_failed_write_rolls_back () =
   );
   Printf.printf "PASS: failed_write_rolls_back\n"
 
+(* A failed commit must restore the original directory entry, not merely its
+   bytes: symlinks, executable mode, and hard links are all observable. *)
+let test_failed_write_preserves_entry () =
+  with_temp_git_repo (fun dir ->
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"Entry rollback") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-linked.yaml"
+                          ~content:"id: linked\n" ~commit_msg:"linked") in
+    let wt = assert_ok (Git.with_worktree (fun wt -> Ok wt)) in
+    let linked = Filename.concat wt ".ditz/issue-linked.yaml" in
+    let peer = Filename.concat wt "peer.yaml" in
+    Unix.link linked peer;
+    Unix.chmod linked 0o755;
+    let before = Unix.lstat linked in
+    let target = Filename.concat wt "target.yaml" in
+    let oc = open_out target in output_string oc "target must survive\n"; close_out oc;
+    let symlink = Filename.concat wt ".ditz/issue-symlink.yaml" in
+    Unix.symlink "../target.yaml" symlink;
+    run_in ~cwd:wt "git add -- .ditz/issue-symlink.yaml";
+    let index_before = assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-symlink.yaml"]) in
+    let hooks = Filename.concat dir "failing-hooks" in
+    Unix.mkdir hooks 0o755;
+    let hook = Filename.concat hooks "pre-commit" in
+    let oc = open_out hook in output_string oc "#!/bin/sh\nexit 1\n"; close_out oc;
+    Unix.chmod hook 0o755;
+    run_in ~cwd:dir (Printf.sprintf "git config core.hooksPath %s" (Filename.quote hooks));
+    let check_linked () =
+      let after = Unix.lstat linked in
+      assert (after.Unix.st_ino = before.Unix.st_ino);
+      assert (after.Unix.st_dev = before.Unix.st_dev);
+      assert (after.Unix.st_perm = 0o755);
+      assert (after.Unix.st_nlink = before.Unix.st_nlink);
+      assert (Fs_util.read_file peer = "id: linked\n")
+    in
+    let check_symlink () =
+      assert ((Unix.lstat symlink).Unix.st_kind = Unix.S_LNK);
+      assert (Unix.readlink symlink = "../target.yaml");
+      assert (Fs_util.read_file target = "target must survive\n");
+      assert (assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-symlink.yaml"]) = index_before)
+    in
+    assert_error (Git.write_to_branch ~path:".ditz/issue-linked.yaml"
+                    ~content:"id: changed\n" ~commit_msg:"fail linked write");
+    check_linked ();
+    assert_error (Git.delete_from_branch ~path:".ditz/issue-linked.yaml"
+                    ~commit_msg:"fail linked delete");
+    check_linked ();
+    assert_error (Git.write_to_branch ~path:".ditz/issue-symlink.yaml"
+                    ~content:"id: replacement\n" ~commit_msg:"fail symlink write");
+    check_symlink ();
+    assert_error (Git.delete_from_branch ~path:".ditz/issue-symlink.yaml"
+                    ~commit_msg:"fail symlink delete");
+    check_symlink ();
+    assert (Sys.readdir (Filename.concat wt ".ditz")
+            |> Array.for_all (fun name -> not (contains name ".backup-")))
+  );
+  Printf.printf "PASS: failed_write_preserves_entry\n"
+
 let test_delete_from_branch () =
   with_temp_git_repo (fun _ ->
     let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"TestProject") in
@@ -1014,6 +1070,7 @@ let () =
   test_delete_from_branch ();
   test_write_commits_only_its_path ();
   test_failed_write_rolls_back ();
+  test_failed_write_preserves_entry ();
   test_persistent_worktree ();
   test_ephemeral_worktree ();
   test_find_common_root ();

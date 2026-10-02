@@ -379,6 +379,37 @@ let list_ditz_files () =
     Taken before any mutation so a failed write can be put back exactly. *)
 type path_snapshot = { file : string option; index : (string * string) option }
 
+(* Keep the original directory entry, not just its bytes. A hard link preserves
+   the inode (and thus its mode and other hard links); on Unix, link(2) also
+   links a symlink itself rather than following its target. The sidecar is
+   created with link(2), which refuses to overwrite an existing entry. *)
+let backup_path ~full_path (snap : path_snapshot) =
+  match snap.file with
+  | None -> Ok None
+  | Some _ ->
+    let dir = Filename.dirname full_path in
+    let base = Filename.basename full_path in
+    (try
+       let backup = Filename.temp_file ~temp_dir:dir (base ^ ".backup-") "" in
+       Unix.unlink backup;
+       Unix.link full_path backup;
+       Ok (Some backup)
+     with exn ->
+       Error (`Msg (Printf.sprintf "cannot preserve %s before changing it (%s)"
+                      full_path (Printexc.to_string exn))))
+
+let remove_backup = function
+  | None -> Ok ()
+  | Some backup ->
+    (try Unix.unlink backup; Ok () with exn ->
+       Error (`Msg (Printf.sprintf "cannot remove backup %s (%s)"
+                      backup (Printexc.to_string exn))))
+
+let finish_committed backup =
+  match remove_backup backup with
+  | Ok () -> Ok ()
+  | Error (`Msg m) -> Error (`Msg ("commit succeeded; " ^ m ^ "; do not retry"))
+
 (* Refuses (Error) rather than guess: an existing file we cannot read, or an
    index entry we cannot interpret, must not be replaced by a write that might
    then have to be undone without knowing what was there. *)
@@ -424,7 +455,7 @@ let snapshot_path ~worktree_path ~path ~full_path =
     exactly "as before": the index entry as snapshotted ([staged]: only if our
     `git add` got that far) and the file as snapshotted. Any step of the undo
     that fails is reported, not swallowed. *)
-let rollback_path ~worktree_path ~path ~full_path ~(snap : path_snapshot) ~staged err =
+let rollback_path ~worktree_path ~path ~full_path ~(snap : path_snapshot) ~backup ~staged err =
   let problems = ref [] in
   let note what = function
     | Ok _ -> ()
@@ -439,8 +470,11 @@ let rollback_path ~worktree_path ~path ~full_path ~(snap : path_snapshot) ~stage
        | None ->
          git ~cwd:worktree_path ["rm"; "--cached"; "-q"; "--ignore-unmatch"; "--"; path]);
   note ("restoring " ^ full_path)
-    (match snap.file with
-     | Some old -> Fs_util.write_file_atomic ~path:full_path ~content:old
+    (match backup with
+     | Some backup ->
+       (try Unix.rename backup full_path; Ok () with exn ->
+          Error (`Msg (Printf.sprintf "backup remains at %s (%s)"
+                         backup (Printexc.to_string exn))))
      | None ->
        (match Sys.remove full_path with
         | () -> Ok ()
@@ -468,8 +502,14 @@ let write_to_branch ~path ~content ~commit_msg =
     match snapshot_path ~worktree_path ~path ~full_path with
     | Error e -> Error e
     | Ok snap ->
-    match Fs_util.write_file_atomic ~path:full_path ~content with
+    match backup_path ~full_path snap with
     | Error e -> Error e
+    | Ok backup ->
+    match Fs_util.write_file_atomic ~path:full_path ~content with
+    | Error (`Msg m) ->
+      (match remove_backup backup with
+       | Ok () -> Error (`Msg m)
+       | Error (`Msg cleanup) -> Error (`Msg (m ^ " (" ^ cleanup ^ ")")))
     | Ok () ->
 
     (* Add and commit THIS path only. The worktree is shared by every ditz
@@ -479,14 +519,14 @@ let write_to_branch ~path ~content ~commit_msg =
        commit are limited to [path]; `commit -- <path>` commits that path's
        state and leaves any other staged change staged. *)
     match git ~cwd:worktree_path ["add"; "--"; path] with
-    | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:false e
+    | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:false e
     | Ok _ ->
       match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"; "--"; path] with
-      | Ok _ -> Ok () (* this path is unchanged: nothing to commit *)
+      | Ok _ -> remove_backup backup (* this path is unchanged: nothing to commit *)
       | Error _ ->
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:true e
-        | Ok _ -> Ok ()
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:true e
+        | Ok _ -> finish_committed backup
   )
 
 (** Delete a file from ditz-metadata branch *)
@@ -497,14 +537,25 @@ let delete_from_branch ~path ~commit_msg =
       match snapshot_path ~worktree_path ~path ~full_path with
       | Error e -> Error e
       | Ok snap ->
-      Sys.remove full_path;
+      match backup_path ~full_path snap with
+      | Error e -> Error e
+      | Ok backup ->
+      (match Sys.remove full_path with
+       | () -> Ok ()
+       | exception Sys_error m -> Error (`Msg (Printf.sprintf "cannot delete %s: %s" full_path m)))
+      |> function
+      | Error (`Msg m) ->
+        (match remove_backup backup with
+         | Ok () -> Error (`Msg m)
+         | Error (`Msg cleanup) -> Error (`Msg (m ^ " (" ^ cleanup ^ ")")))
+      | Ok () ->
       match git ~cwd:worktree_path ["add"; "--"; path] with
-      | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:false e
+      | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:false e
       | Ok _ ->
         (* Commit only this deletion; see write_to_branch. *)
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
-        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~staged:true e
-        | Ok _ -> Ok ()
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:true e
+        | Ok _ -> finish_committed backup
     end else
       Error (`Msg (Printf.sprintf "File %s not found" path))
   )
