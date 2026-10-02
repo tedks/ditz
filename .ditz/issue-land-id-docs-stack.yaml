@@ -26,7 +26,7 @@ type: task
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: unstarted
+status: in_progress
 disposition:
 creation_time: 2026-09-16T23:40:57-00:00
 references: []
@@ -54,5 +54,9 @@ log_events:
     since 2026-09-15; #30 and #32''s Important council findings were not rechecked
     and should be treated as unverified. Decides: Ted (whether/when to land, and whether
     to authorize the import-fidelity implementation at all).'
+- time: 2026-10-02T05:49:56-00:00
+  who: Ted Smith
+  what: started
+  comment: ""
 blocked_by:
 - ci-actions-disabled
