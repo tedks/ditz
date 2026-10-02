@@ -14,8 +14,8 @@ type: task
 component: ci
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: unstarted
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-16T23:40:57-00:00
 references: []
 log_events:
@@ -31,6 +31,12 @@ log_events:
   who: Ted Smith
   what: blocks list-filter-validation
   comment: ""
+- time: 2026-10-02T05:49:55-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'Resolved by explicit operator policy: GitHub Actions CI and automated
+    PR review stay disabled. Exact-head local nix develop --command dune build and
+    dune runtest --force plus council fixpoint are the merge gates.'
 blocks:
 - land-id-docs-stack
 - list-filter-validation
