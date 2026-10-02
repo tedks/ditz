@@ -258,12 +258,15 @@ let test_failed_write_rolls_back () =
        if Unix.getuid () <> 0 then assert (contains m "incomplete"));
     (try Sys.remove (Filename.concat wt ".ditz/issue-c.yaml") with Sys_error _ -> ());
     let oc = open_out ro_hook in output_string oc "#!/bin/sh\nexit 1\n"; close_out oc;
-    (* an existing file that can't be read is refused BEFORE anything changes *)
+    (* Even an unreadable regular file can be restored without opening it. *)
     if Unix.getuid () <> 0 then begin
       Unix.chmod a 0o000;
-      (match Git.write_to_branch ~path:".ditz/issue-a.yaml" ~content:"id: a\n" ~commit_msg:"a4" with
-       | Ok () -> failwith "expected a refusal for an unreadable target"
-       | Error (`Msg m) -> assert (contains m "cannot read"));
+      let before = Unix.lstat a in
+      assert_error (Git.write_to_branch ~path:".ditz/issue-a.yaml"
+                      ~content:"id: a\n" ~commit_msg:"a4");
+      let after = Unix.lstat a in
+      assert (after.Unix.st_ino = before.Unix.st_ino);
+      assert (after.Unix.st_perm = 0o000);
       Unix.chmod a 0o644;
       assert (Fs_util.read_file a = "id: a\ntitle: before\n")
     end;
@@ -293,6 +296,11 @@ let test_failed_write_preserves_entry () =
     Unix.symlink "../target.yaml" symlink;
     run_in ~cwd:wt "git add -- .ditz/issue-symlink.yaml";
     let index_before = assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-symlink.yaml"]) in
+    let dangling = Filename.concat wt ".ditz/issue-dangling.yaml" in
+    Unix.symlink "../missing.yaml" dangling;
+    let dangling_before = Unix.lstat dangling in
+    run_in ~cwd:wt "git add -- .ditz/issue-dangling.yaml";
+    let dangling_index = assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-dangling.yaml"]) in
     let hooks = Filename.concat dir "failing-hooks" in
     Unix.mkdir hooks 0o755;
     let hook = Filename.concat hooks "pre-commit" in
@@ -313,6 +321,13 @@ let test_failed_write_preserves_entry () =
       assert (Fs_util.read_file target = "target must survive\n");
       assert (assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-symlink.yaml"]) = index_before)
     in
+    let check_dangling () =
+      let after = Unix.lstat dangling in
+      assert (after.Unix.st_kind = Unix.S_LNK);
+      assert (after.Unix.st_ino = dangling_before.Unix.st_ino);
+      assert (Unix.readlink dangling = "../missing.yaml");
+      assert (assert_ok (Git.git ~cwd:wt ["ls-files"; "-s"; "--"; ".ditz/issue-dangling.yaml"]) = dangling_index)
+    in
     assert_error (Git.write_to_branch ~path:".ditz/issue-linked.yaml"
                     ~content:"id: changed\n" ~commit_msg:"fail linked write");
     check_linked ();
@@ -325,6 +340,35 @@ let test_failed_write_preserves_entry () =
     assert_error (Git.delete_from_branch ~path:".ditz/issue-symlink.yaml"
                     ~commit_msg:"fail symlink delete");
     check_symlink ();
+    (match Git.write_to_branch ~path:".ditz/issue-dangling.yaml"
+             ~content:"id: replacement\n" ~commit_msg:"fail dangling write" with
+     | Ok () -> failwith "expected the commit hook to fail"
+     | Error (`Msg m) -> assert (contains m "git commit"));
+    check_dangling ();
+    (match Git.delete_from_branch ~path:".ditz/issue-dangling.yaml"
+             ~commit_msg:"fail dangling delete" with
+     | Ok () -> failwith "expected the commit hook to fail"
+     | Error (`Msg m) -> assert (contains m "git commit"));
+    check_dangling ();
+    let fifo_target = Filename.concat wt "fifo-target" in
+    Unix.mkfifo fifo_target 0o600;
+    let fifo_link = Filename.concat wt ".ditz/issue-fifo-link.yaml" in
+    Unix.symlink "../fifo-target" fifo_link;
+    run_in ~cwd:wt "git add -- .ditz/issue-fifo-link.yaml";
+    (match Git.write_to_branch ~path:".ditz/issue-fifo-link.yaml"
+             ~content:"id: replacement\n" ~commit_msg:"fail fifo link write" with
+     | Ok () -> failwith "expected the commit hook to fail"
+     | Error (`Msg m) -> assert (contains m "git commit"));
+    assert ((Unix.lstat fifo_link).Unix.st_kind = Unix.S_LNK);
+    assert (Unix.readlink fifo_link = "../fifo-target");
+    assert ((Unix.lstat fifo_target).Unix.st_kind = Unix.S_FIFO);
+    let fifo = Filename.concat wt ".ditz/issue-fifo.yaml" in
+    Unix.mkfifo fifo 0o600;
+    (match Git.write_to_branch ~path:".ditz/issue-fifo.yaml"
+             ~content:"id: replacement\n" ~commit_msg:"refuse fifo" with
+     | Ok () -> failwith "expected special file refusal"
+     | Error (`Msg m) -> assert (contains m "unsupported file type"));
+    assert ((Unix.lstat fifo).Unix.st_kind = Unix.S_FIFO);
     assert (Sys.readdir (Filename.concat wt ".ditz")
             |> Array.for_all (fun name -> not (contains name ".backup-")))
   );

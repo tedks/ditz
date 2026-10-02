@@ -374,10 +374,10 @@ let list_ditz_files_result () =
 let list_ditz_files () =
   match list_ditz_files_result () with Ok files -> files | Error _ -> []
 
-(** What a path looked like before a write touched it: the worktree file
-    ([None] = absent) and its stage-0 index entry ([None] = not in the index).
+(** What a path looked like before a write touched it: whether a supported
+    worktree entry exists, and its stage-0 index entry ([None] = not indexed).
     Taken before any mutation so a failed write can be put back exactly. *)
-type path_snapshot = { file : string option; index : (string * string) option }
+type path_snapshot = { file : bool; index : (string * string) option }
 
 (* Keep the original directory entry, not just its bytes. A hard link preserves
    the inode (and thus its mode and other hard links); on Unix, link(2) also
@@ -385,8 +385,8 @@ type path_snapshot = { file : string option; index : (string * string) option }
    created with link(2), which refuses to overwrite an existing entry. *)
 let backup_path ~full_path (snap : path_snapshot) =
   match snap.file with
-  | None -> Ok None
-  | Some _ ->
+  | false -> Ok None
+  | true ->
     let dir = Filename.dirname full_path in
     let base = Filename.basename full_path in
     (try
@@ -410,21 +410,17 @@ let finish_committed backup =
   | Ok () -> Ok ()
   | Error (`Msg m) -> Error (`Msg ("commit succeeded; " ^ m ^ "; do not retry"))
 
-(* Refuses (Error) rather than guess: an existing file we cannot read, or an
-   index entry we cannot interpret, must not be replaced by a write that might
-   then have to be undone without knowing what was there. *)
+(* Refuses (Error) rather than guess: only regular files and symlinks can be
+   safely backed up here. lstat avoids following a dangling symlink or opening
+   a FIFO. An index entry we cannot interpret is refused too. *)
 let snapshot_path ~worktree_path ~path ~full_path =
   let file =
     match Unix.lstat full_path with
-    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok None
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok false
     | exception Unix.Unix_error (e, _, _) ->
       Error (Printf.sprintf "cannot check %s: %s" full_path (Unix.error_message e))
-    | _ ->
-      (match Fs_util.read_file full_path with
-       | content -> Ok (Some content)
-       | exception exn ->
-         Error (Printf.sprintf "cannot read %s before changing it (%s)"
-                  full_path (Printexc.to_string exn)))
+    | { Unix.st_kind = Unix.S_REG | Unix.S_LNK; _ } -> Ok true
+    | _ -> Error (Printf.sprintf "unsupported file type at %s" full_path)
   in
   let index =
     match git ~cwd:worktree_path ["ls-files"; "-s"; "--"; path] with
@@ -533,9 +529,10 @@ let write_to_branch ~path ~content ~commit_msg =
 let delete_from_branch ~path ~commit_msg =
   with_worktree (fun worktree_path ->
     let full_path = Filename.concat worktree_path path in
-    if Sys.file_exists full_path then begin
-      match snapshot_path ~worktree_path ~path ~full_path with
+    match snapshot_path ~worktree_path ~path ~full_path with
       | Error e -> Error e
+      | Ok { file = false; _ } ->
+        Error (`Msg (Printf.sprintf "File %s not found" path))
       | Ok snap ->
       match backup_path ~full_path snap with
       | Error e -> Error e
@@ -556,8 +553,6 @@ let delete_from_branch ~path ~commit_msg =
         match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
         | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:true e
         | Ok _ -> finish_committed backup
-    end else
-      Error (`Msg (Printf.sprintf "File %s not found" path))
   )
 
 (** Fetch ditz-metadata from origin *)
