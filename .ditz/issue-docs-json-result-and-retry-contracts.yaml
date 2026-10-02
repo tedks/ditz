@@ -15,8 +15,8 @@ type: task
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-10-02T05:57:07-00:00
 references: []
 log_events:
@@ -28,3 +28,10 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T06:34:56-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'Merged PR #37 at47522e5399ec06f20f0faf5be815186ab1159554. All command
+    result shapes, partial success/retry effects, incomplete-read caveats, and local-versus-remote
+    outcomes documented. Independent light review CLEAN after two corrections;35 isolated
+    CLI observations and Nix build passed.'
