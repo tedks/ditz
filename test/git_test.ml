@@ -986,6 +986,35 @@ let test_sync_pulls_without_fetch_refspec () =
     assert_error (Git.fetch ()));
   Printf.printf "PASS: sync_pulls_without_fetch_refspec\n"
 
+(* If another clone deletes the remote branch, a pull must not treat the
+   cached origin/ditz-metadata as freshly fetched remote history. *)
+let test_pull_clears_deleted_remote_branch () =
+  let origin, c1, c2 = make_cloned_pair "ditz_deleted_remote" in
+  let old_cwd = Sys.getcwd () in
+  let cleanup () = Sys.chdir old_cwd; rm_rf origin; rm_rf c1; rm_rf c2 in
+  (try
+    Sys.chdir c1;
+    let () = assert_ok (Git.create_ditz_metadata_branch ~project_name:"Deleted") in
+    let () = assert_ok (Git.write_to_branch ~path:".ditz/issue-kept.yaml"
+                          ~content:"id: kept\n" ~commit_msg:"kept") in
+    let () = assert_ok (Git.sync ()) in
+    Sys.chdir c2;
+    let _ = assert_ok (Git.pull_report ()) in
+    assert (Git.sync_state () = Ok (Git.Tracking { ahead = 0; behind = 0 }));
+    let local_before = assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) in
+    run_in ~cwd:c1 "git push origin --delete ditz-metadata";
+    (* The cached ref still exists until this pull examines the remote. *)
+    assert (Git.branch_exists ~remote:true "ditz-metadata");
+    let report = assert_ok (Git.pull_report ()) in
+    assert (report.pulled = 0 && report.pushed = 0);
+    assert (Git.sync_state () = Ok Git.No_remote_branch);
+    assert (not (Git.branch_exists ~remote:true "ditz-metadata"));
+    assert (assert_ok (Git.git ["rev-parse"; "ditz-metadata"]) = local_before);
+    ignore (assert_ok (Git.read_file_from_branch ".ditz/issue-kept.yaml"));
+    cleanup ()
+  with e -> cleanup (); raise e);
+  Printf.printf "PASS: pull_clears_deleted_remote_branch\n"
+
 (* sync says what it did, and sync_state says where the clone stands, from
    local refs only. *)
 let test_sync_reports_and_state () =
@@ -1240,6 +1269,7 @@ let () =
   test_sync_conflict_escape_hatch ();
   test_sync_names_staged_leftovers ();
   test_sync_pulls_without_fetch_refspec ();
+  test_pull_clears_deleted_remote_branch ();
   test_sync_reports_and_state ();
   test_fresh_clone_can_join ();
   test_push_only_fresh_clone ();

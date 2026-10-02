@@ -567,6 +567,11 @@ let local_ref = "refs/heads/" ^ ditz_branch
     printing "Synced". A missing remote branch (never pushed) is fine; any
     other failure (offline, auth) is an error rather than a pretend success. *)
 let fetch () =
+  let prior_tracking =
+    match git ["rev-parse"; "--verify"; "--quiet"; remote_tracking_ref] with
+    | Ok sha -> Some (String.trim sha)
+    | Error _ -> None
+  in
   match git ["fetch"; "origin"; "+" ^ local_ref ^ ":" ^ remote_tracking_ref] with
   | Ok _ -> Ok ()
   | Error _ as err ->
@@ -578,7 +583,17 @@ let fetch () =
     let (_, _, code) =
       run_git_command ["ls-remote"; "--exit-code"; "--heads"; "origin"; local_ref]
     in
-    if code = 2 then Ok () else err
+    if code = 2 then
+      (* A branch deleted on origin must not leave an old local tracking ref
+         looking like newly fetched data. Compare with the pre-fetch value so
+         another fetch's update cannot be silently removed. *)
+      match prior_tracking with
+      | None -> Ok ()
+      | Some sha ->
+        (match git ["update-ref"; "-d"; remote_tracking_ref; sha] with
+         | Ok _ -> Ok ()
+         | Error (`Msg m) -> Error (`Msg ("remote branch is absent, but stale tracking ref could not be cleared: " ^ m)))
+    else err
 
 (** Auto-resolve a conflicted merge inside the metadata worktree.
     Conflicted issue files are merged semantically (Merge.merge_issues, using
