@@ -20,7 +20,7 @@ type: bugfix
 component: storage
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: paused
+status: in_progress
 disposition:
 creation_time: 2026-09-13T05:34:12-00:00
 references: []
@@ -82,6 +82,10 @@ log_events:
 - time: 2026-09-16T23:40:59-00:00
   who: Ted Smith
   what: blocked by sync-status-visibility
+  comment: ""
+- time: 2026-10-02T05:54:26-00:00
+  who: Ted Smith
+  what: started
   comment: ""
 blocked_by:
 - sync-status-visibility
