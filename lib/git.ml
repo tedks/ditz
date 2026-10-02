@@ -374,6 +374,115 @@ let list_ditz_files_result () =
 let list_ditz_files () =
   match list_ditz_files_result () with Ok files -> files | Error _ -> []
 
+(** What a path looked like before a write touched it: whether a supported
+    worktree entry exists, and its stage-0 index entry ([None] = not indexed).
+    Taken before any mutation so a failed write can be put back exactly. *)
+type path_snapshot = { file : bool; index : (string * string) option }
+
+(* Keep the original directory entry, not just its bytes. A hard link preserves
+   the inode (and thus its mode and other hard links); on Unix, link(2) also
+   links a symlink itself rather than following its target. The sidecar is
+   created with link(2), which refuses to overwrite an existing entry. *)
+let backup_path ~full_path (snap : path_snapshot) =
+  match snap.file with
+  | false -> Ok None
+  | true ->
+    let dir = Filename.dirname full_path in
+    let base = Filename.basename full_path in
+    (try
+       let backup = Filename.temp_file ~temp_dir:dir (base ^ ".backup-") "" in
+       Unix.unlink backup;
+       Unix.link full_path backup;
+       Ok (Some backup)
+     with exn ->
+       Error (`Msg (Printf.sprintf "cannot preserve %s before changing it (%s)"
+                      full_path (Printexc.to_string exn))))
+
+let remove_backup = function
+  | None -> Ok ()
+  | Some backup ->
+    (try Unix.unlink backup; Ok () with exn ->
+       Error (`Msg (Printf.sprintf "cannot remove backup %s (%s)"
+                      backup (Printexc.to_string exn))))
+
+let finish_committed backup =
+  match remove_backup backup with
+  | Ok () -> Ok ()
+  | Error (`Msg m) -> Error (`Msg ("commit succeeded; " ^ m ^ "; do not retry"))
+
+(* Refuses (Error) rather than guess: only regular files and symlinks can be
+   safely backed up here. lstat avoids following a dangling symlink or opening
+   a FIFO. An index entry we cannot interpret is refused too. *)
+let snapshot_path ~worktree_path ~path ~full_path =
+  let file =
+    match Unix.lstat full_path with
+    | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok false
+    | exception Unix.Unix_error (e, _, _) ->
+      Error (Printf.sprintf "cannot check %s: %s" full_path (Unix.error_message e))
+    | { Unix.st_kind = Unix.S_REG | Unix.S_LNK; _ } -> Ok true
+    | _ -> Error (Printf.sprintf "unsupported file type at %s" full_path)
+  in
+  let index =
+    match git ~cwd:worktree_path ["ls-files"; "-s"; "--"; path] with
+    | Error (`Msg e) -> Error e
+    | Ok "" -> Ok None
+    | Ok out ->
+      (match String.split_on_char '\n' out with
+       | [ line ] ->
+         (match String.split_on_char '\t' line with
+          | meta :: _ ->
+            (match String.split_on_char ' ' (String.trim meta) with
+             | [ mode; sha; "0" ] -> Ok (Some (mode, sha))
+             | _ -> Error (Printf.sprintf "%s is unmerged in the index" path))
+          | [] -> Error (Printf.sprintf "unexpected ls-files output for %s" path))
+       | _ -> Error (Printf.sprintf "%s is unmerged in the index" path))
+  in
+  match file, index with
+  | Ok file, Ok index -> Ok { file; index }
+  | Error e, _ | _, Error e ->
+    Error (`Msg (Printf.sprintf "%s; refusing to write it (check `git -C %s status`)"
+                   e (Filename.quote worktree_path)))
+
+(** Undo a write whose git step failed, so it does not linger in the shared
+    worktree. Scoped commits (commit -- <path>) no longer sweep a leftover into
+    the next write's commit -- so a leftover would stay: staged, it makes every
+    later `git merge` refuse, blocking sync; unstaged, it is an edit nobody
+    asked for. The command already reported failure, so the right end state is
+    exactly "as before": the index entry as snapshotted ([staged]: only if our
+    `git add` got that far) and the file as snapshotted. Any step of the undo
+    that fails is reported, not swallowed. *)
+let rollback_path ~worktree_path ~path ~full_path ~(snap : path_snapshot) ~backup ~staged err =
+  let problems = ref [] in
+  let note what = function
+    | Ok _ -> ()
+    | Error (`Msg m) -> problems := Printf.sprintf "%s: %s" what m :: !problems
+  in
+  if staged then
+    note "restoring the index entry"
+      (match snap.index with
+       | Some (mode, sha) ->
+         git ~cwd:worktree_path
+           ["update-index"; "--add"; "--cacheinfo"; String.concat "," [mode; sha; path]]
+       | None ->
+         git ~cwd:worktree_path ["rm"; "--cached"; "-q"; "--ignore-unmatch"; "--"; path]);
+  note ("restoring " ^ full_path)
+    (match backup with
+     | Some backup ->
+       (try Unix.rename backup full_path; Ok () with exn ->
+          Error (`Msg (Printf.sprintf "backup remains at %s (%s)"
+                         backup (Printexc.to_string exn))))
+     | None ->
+       (match Sys.remove full_path with
+        | () -> Ok ()
+        | exception Sys_error _ when not (Sys.file_exists full_path) -> Ok ()
+        | exception Sys_error m -> Error (`Msg m)));
+  match err, List.rev !problems with
+  | e, [] -> Error e
+  | `Msg m, ps ->
+    Error (`Msg (Printf.sprintf
+      "%s (and undoing the failed write was incomplete -- %s; check `git -C %s status`)"
+      m (String.concat "; " ps) (Filename.quote worktree_path)))
+
 (** Write content to a file on ditz-metadata branch using worktree.
     The write is atomic (temp + rename) and does not follow a symlink planted
     at the destination -- issue files are parsed from external sources, so the
@@ -384,38 +493,66 @@ let write_to_branch ~path ~content ~commit_msg =
     let full_path = Filename.concat worktree_path path in
     let dir = Filename.dirname full_path in
     let _ = Sys.command (Printf.sprintf "mkdir -p %s" (Filename.quote dir)) in
-    match Fs_util.write_file_atomic ~path:full_path ~content with
+    (* What was there before, so a write that fails after touching the
+       worktree can be undone exactly (see rollback_path). *)
+    match snapshot_path ~worktree_path ~path ~full_path with
     | Error e -> Error e
+    | Ok snap ->
+    match backup_path ~full_path snap with
+    | Error e -> Error e
+    | Ok backup ->
+    match Fs_util.write_file_atomic ~path:full_path ~content with
+    | Error (`Msg m) ->
+      (match remove_backup backup with
+       | Ok () -> Error (`Msg m)
+       | Error (`Msg cleanup) -> Error (`Msg (m ^ " (" ^ cleanup ^ ")")))
     | Ok () ->
 
-    (* Add and commit *)
-    match git ~cwd:worktree_path ["add"; path] with
-    | Error e -> Error e
+    (* Add and commit THIS path only. The worktree is shared by every ditz
+       process, and anything else left staged in it (a write whose commit
+       failed, a concurrent writer's `git add`) must not be swept into this
+       commit under this commit's message. Both the has-changes check and the
+       commit are limited to [path]; `commit -- <path>` commits that path's
+       state and leaves any other staged change staged. *)
+    match git ~cwd:worktree_path ["add"; "--"; path] with
+    | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:false e
     | Ok _ ->
-      (* Check if there are changes to commit *)
-      match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"] with
-      | Ok _ -> Ok () (* No changes staged, nothing to commit *)
+      match git ~cwd:worktree_path ["diff"; "--cached"; "--quiet"; "--"; path] with
+      | Ok _ -> remove_backup backup (* this path is unchanged: nothing to commit *)
       | Error _ ->
-        (* There are staged changes, commit them *)
-        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
-        | Error e -> Error e
-        | Ok _ -> Ok ()
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:true e
+        | Ok _ -> finish_committed backup
   )
 
 (** Delete a file from ditz-metadata branch *)
 let delete_from_branch ~path ~commit_msg =
   with_worktree (fun worktree_path ->
     let full_path = Filename.concat worktree_path path in
-    if Sys.file_exists full_path then begin
-      Sys.remove full_path;
-      match git ~cwd:worktree_path ["add"; path] with
+    match snapshot_path ~worktree_path ~path ~full_path with
       | Error e -> Error e
+      | Ok { file = false; _ } ->
+        Error (`Msg (Printf.sprintf "File %s not found" path))
+      | Ok snap ->
+      match backup_path ~full_path snap with
+      | Error e -> Error e
+      | Ok backup ->
+      (match Sys.remove full_path with
+       | () -> Ok ()
+       | exception Sys_error m -> Error (`Msg (Printf.sprintf "cannot delete %s: %s" full_path m)))
+      |> function
+      | Error (`Msg m) ->
+        (match remove_backup backup with
+         | Ok () -> Error (`Msg m)
+         | Error (`Msg cleanup) -> Error (`Msg (m ^ " (" ^ cleanup ^ ")")))
+      | Ok () ->
+      match git ~cwd:worktree_path ["add"; "--"; path] with
+      | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:false e
       | Ok _ ->
-        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg] with
-        | Error e -> Error e
-        | Ok _ -> Ok ()
-    end else
-      Error (`Msg (Printf.sprintf "File %s not found" path))
+        (* Commit only this deletion; see write_to_branch. *)
+        match git ~cwd:worktree_path ["commit"; "-m"; commit_msg; "--"; path] with
+        | Error e -> rollback_path ~worktree_path ~path ~full_path ~snap ~backup ~staged:true e
+        | Ok _ -> finish_committed backup
   )
 
 (** Fetch ditz-metadata from origin *)
@@ -634,8 +771,53 @@ let merge () =
     Ok () (* Nothing to merge *)
   else
     with_worktree (fun worktree_path ->
+      let merging () = Result.is_ok (git ~cwd:worktree_path ["rev-parse"; "-q"; "--verify"; "MERGE_HEAD"]) in
+      (* git merge refuses outright when the index has changes relative to
+         HEAD. Say what they are and how to clear them, instead of letting the
+         refusal reach conflict resolution (which then reports a merge that
+         never started as "still mid-merge"). *)
+      (* Nothing to merge (origin is already in our history): don't make a
+         leftover staged file block a sync that has nothing to merge. *)
+      let up_to_date =
+        Result.is_ok (git ~cwd:worktree_path
+          ["merge-base"; "--is-ancestor"; "origin/" ^ ditz_branch; "HEAD"])
+      in
+      if up_to_date && not (merging ()) then Ok () else
+      let staged =
+        if merging () then []
+        else match git ~cwd:worktree_path ["diff"; "--cached"; "--name-only"] with
+          | Ok out -> List.filter (fun l -> String.trim l <> "") (String.split_on_char '\n' out)
+          | Error _ -> []
+      in
+      (* If origin is a straight fast-forward from here, let git try it: a
+         fast-forward keeps unrelated staged changes, and git itself refuses if
+         they would be overwritten. Only if that fails is the leftover the
+         problem to report. *)
+      let fast_forwarded =
+        staged <> []
+        && Result.is_ok (git ~cwd:worktree_path
+             ["merge-base"; "--is-ancestor"; "HEAD"; "origin/" ^ ditz_branch])
+        && Result.is_ok (git ~cwd:worktree_path ["merge"; "--ff-only"; "origin/" ^ ditz_branch])
+      in
+      if fast_forwarded then Ok ()
+      else if staged <> [] then
+        Error (`Msg (Printf.sprintf
+          "the ditz metadata worktree %s has staged changes that are not \
+           committed: %s. (A failed write or a hand edit can leave these.) \
+           To keep them: git -C %s commit -m <msg>. To discard them: git -C %s \
+           restore --staged -- %s (and restore or delete the files). Then run \
+           'ditz sync' again."
+          worktree_path (String.concat ", " staged) (Filename.quote worktree_path)
+          (Filename.quote worktree_path) (String.concat " " (List.map Filename.quote staged))))
+      else
       match git ~cwd:worktree_path ["merge"; "origin/" ^ ditz_branch; "-m"; "ditz: merge remote changes"] with
       | Ok _ -> Ok ()
+      | Error (`Msg m) when not (merging ()) ->
+        (* The merge never started (e.g. uncommitted edits it would
+           overwrite): nothing to resolve or abort. Pass git's reason on. *)
+        Error (`Msg (Printf.sprintf
+          "sync could not start merging origin/%s: %s (check `git -C %s status`)"
+          ditz_branch m (Filename.quote worktree_path)))
       | Error e ->
         (try resolve_conflicted_merge ~merge_error:(Error e) worktree_path
          with exn ->
