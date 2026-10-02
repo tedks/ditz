@@ -7,8 +7,8 @@ One issue is one YAML file; git carries the history. Keep ordinary tracking
 non-interactive, inspectable, and usable without a daemon, database, or service.
 Replace beads where these workflows fit, rather than copy every beads feature.
 
-This roadmap was reconciled on 2026-10-02 against merged source at `83dd20e`
-and the open PRs below. A shipped implementation is not proof of fleet rollout
+This roadmap was reconciled on 2026-10-02 against the completed safety stack
+at `8dd0739` and the documentation linked below. A shipped implementation is not proof of fleet rollout
 or a completed migration. Earlier plans and decisions remain in git history;
 unchecked historical ideas are not an implementation queue.
 
@@ -38,40 +38,67 @@ as proposals until implemented.
 
 Structured output exists across the command surface, but mutation response
 shapes differ. Accepting `--json` is not a promise that every write returns the
-complete resulting issue. That consistency is a subject for the usage study.
+complete resulting issue. The usage study proposes a separate opt-in contract;
+that proposal is not implemented.
+
+## Safety and feedback work completed on 2026-10-02
+
+All six PRs below landed as normal merges after review and local gates. The tested
+heads and merge commits are recorded here so delivery is distinguishable from a
+proposal or a historical green test. Each PR carries its own review/gate comment.
+
+| PR | Result | Tested head | Merge commit |
+| --- | --- | --- | --- |
+| [#28](https://github.com/tedks/ditz/pull/28) | Refuse unreadable or staged-only issue occupants; fail closed when the index cannot be inspected | `f50fca5` | `8e252ea` |
+| [#27](https://github.com/tedks/ditz/pull/27) | Explain that `--id` is the issue name and re-add is not update | `2439961` | `08eb430` |
+| [#29](https://github.com/tedks/ditz/pull/29) | Strict filters, `-s open`, and comma-separated values | `e590b65` | `89e4554` |
+| [#30](https://github.com/tedks/ditz/pull/30) | Commit only the owned path; rollback preserves file-entry identity and refuses unsupported special files | `b511f86` | `94de2b3` |
+| [#31](https://github.com/tedks/ditz/pull/31) | Explicit fetch refspec, truthful sync state, and stale remote-ref handling | `9f9833b` | `42db9df` |
+| [#32](https://github.com/tedks/ditz/pull/32) | Serialize mutations for the actual store, read stdin outside the lock, and fail promptly on hook reentry | `5eeb62d` | `8dd0739` |
+
+Every head passed `nix develop --command dune build` and
+`nix develop --command dune runtest --force`, including after rebases. Substantive
+changes reached a clean Codex/Google council fixpoint; the Anthropic seat was
+unavailable due to credits and remained empty. The wording-only #27 received a
+proportionate light review. Regression tests for repairs were mutation-checked.
+The blocked-pipe observation test is conditional on Linux `/proc` availability;
+these local checks are not evidence of verification on every platform.
+
+The former `ci-actions-disabled` blocker is closed under the local-gates policy.
+Four nonblocking review followups remain tracked: `remedy-relative-path-quoting`,
+`filter-linear-accumulation`, `sync-report-maintenance`, and
+`filesystem-lock-hygiene`.
 
 ## Next work, in order
 
-### 1. Finish the existing safety and feedback PRs
+### 1. Improve ergonomics from observed agent interactions
 
-The following sequence was authorized on 2026-10-02. These are open draft PRs
-at the baseline above, not merged guarantees. Finish review and local gates
-before marking a row delivered.
+The [agent ergonomics investigation](docs/agent-ergonomics-investigation-20261002.md)
+is delivered in [PR #34](https://github.com/tedks/ditz/pull/34). It analyzes 91
+operational tool interactions, builds on the June and September studies, and
+writes desired caller conversations before implementation slices. Its bounded
+sample and unknown outcomes are explicit; it is not a fleet failure-rate estimate.
 
-| Sequence | PR | Result | Remaining evidence/work at baseline |
-| --- | --- | --- | --- |
-| A1 | [#28](https://github.com/tedks/ditz/pull/28) | Refuse `add --id` over an occupied but unreadable issue | Complete interrupted foreign review and verify exact head |
-| A2 | [#27](https://github.com/tedks/ditz/pull/27) | Explain that `--id` is the issue name and re-add is not update | Rebase after #28 and revalidate |
-| B1 | [#29](https://github.com/tedks/ditz/pull/29) | Strict filters, `-s open`, and comma-separated filter values | Complete review and verify exact head |
-| B2 | [#30](https://github.com/tedks/ditz/pull/30) | Commit only the path owned by a write | Fix rollback losing symlink/file-mode/hard-link identity; review the fix |
-| B3 | [#31](https://github.com/tedks/ditz/pull/31) | Pull with an explicit refspec and report sync state | Rebase after #30 and revalidate |
-| B4 | [#32](https://github.com/tedks/ditz/pull/32) | Serialize concurrent tracker mutations | Fix configured-directory lock coverage, locks held during stdin reads, and hook reentrancy; stabilize lock tests |
+The first practical slice teaches the existing CLI: exact ID capture, literal
+stdin, plain help, readiness boundaries, and per-item recovery. The
+[agent recipes](docs/agent-recipes.md) shipped in
+[PR #35](https://github.com/tedks/ditz/pull/35); their examples were reverified
+against the final safety-stack source before merge.
 
-Land A1 then A2, followed by B1 through B4. Use normal PR merges, rebase one
-successor at a time, and retain the branches until the stacks are complete.
-The current tracker records review details in `land-id-docs-stack`,
-`commit-own-path-only`, and `write-lock-recheck`.
+Open product questions and proposed contracts are recorded separately:
 
-The former `ci-actions-disabled` blocker is superseded by the local-gates
-policy below. Enabling CI is not a prerequisite for this work.
+- `oq-ergonomics-tracker-discovery`: a read-only location result, without repair
+  or automatic initialization.
+- `oq-ergonomics-result-contract`: an additive, consistent mutation result that
+  preserves existing `--json` consumers and makes retry effects explicit.
+- `oq-ergonomics-incomplete-read-policy`: distinguish a complete empty result
+  from a partial scan before changing selection behavior.
+- `decision-hide-closed-limit-count`: bounded reads and stable ordering, keeping
+  the closed-issue visibility decision separate.
 
-### 2. Design ergonomics from observed agent interactions
-
-An investigative lane is examining recent ditz and beads tool calls, building
-on the June and September studies. Start with an agent's intended task and the
-interaction it would want to write; only then choose the implementation.
-Python-like examples can describe a desired interface without committing us to
-a Python SDK.
+Start with an agent's intended task and the interaction it would want to write;
+only then choose the implementation. Python-like examples can describe a desired
+interface without committing us to a Python SDK.
 
 For each proposed improvement, record:
 
@@ -96,7 +123,7 @@ Keep unsolicited guidance in human error or empty-state output, never in
 `--json`, `--ids-only`, or routine successful output. Machine output must remain
 parseable and free of instructional prose.
 
-### 3. Verify rollout before declaring release readiness
+### 2. Verify rollout before declaring release readiness
 
 Distribution and import code have shipped. Their presence does not establish
 that every machine uses the same revision, a real tracker migrated without
@@ -156,8 +183,8 @@ restored and shipped because graph traversal already existed.
 Git-backed trackers use an orphan `ditz-metadata` branch and a persistent sparse
 worktree. Writes commit locally; `sync` fetches, merges, and pushes.
 The filesystem backend also remains supported. Atomic file replacement alone
-does not serialize concurrent read-modify-write operations; PR #32 addresses
-that distinct risk.
+does not serialize concurrent read-modify-write operations. PR #32 adds a
+store-scoped lock for CLI mutations; manual file edits do not acquire that lock.
 
 Sync merges append-only log events, resolves status/disposition changes, and
 three-way merges reference lists without resurrecting deletions. Conflicting
