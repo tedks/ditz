@@ -1,0 +1,24 @@
+id: rollout-agent-tracking-skill
+title: Activate merged issue-tracking skill through coordinated dotfiles rollout
+desc: 'The source skill and scaffold changes are in dotfiles PR169. Activation is
+  separate: ~/.claude/skills points to dotfiles/master and Codex requires the new
+  per-skill link. Local master cde7ffd predates remote baseline7955c8e, which includes
+  unrelated merged webcam script/systemd-unit changes exposed through live symlinks.
+  Do not fast-forward master or run global installers just to activate this skill
+  without accounting for those changes. Use the normal coordinated dotfiles rollout,
+  preserve unrelated untracked files, and verify Claude and Codex resolve the same
+  canonical source. No alternate copies or feature-branch links installed by this
+  mission.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T06:34:56-00:00
+references: []
+log_events:
+- time: 2026-10-02T06:34:56-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
