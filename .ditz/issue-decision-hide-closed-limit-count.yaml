@@ -23,3 +23,15 @@ log_events:
   who: Ted Smith
   what: changed component from cli to open-questions
   comment: ""
+- time: 2026-10-02T05:57:08-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Ergonomics investigation Q3: retain this existing issue, do not duplicate
+    it. Preserve explicit default closed visibility. Recommend additive limit/count,
+    deterministic list ID ordering and ready rank/age/ID tie-break, limit0 valid,
+    count unbounded by limit; no implicit caps/pagination. Existing June approval
+    of limit/count acknowledged; ordering and incomplete-scan compatibility need explicit
+    acceptance. Evidence G2/prior study; synthetic baseline rejects --limit124. Coordinate
+    Q4 incomplete-read policy. Owner Ted; blocks slice4. Please place this existing
+    ruling in open-questions when safely filing; do not create a second issue merely
+    for component placement. Evidence report: https://github.com/tedks/ditz/pull/34.'
