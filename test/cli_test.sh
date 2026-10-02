@@ -23,7 +23,7 @@ cd "$work"
 
 # Every subcommand must at least construct its term (--help) without crashing.
 # This is what would have caught the -q/log-verbosity duplicate-flag crash.
-for sub in list add init show close reopen start stop drop context ready \
+for sub in list add init onboard show close reopen start stop drop context ready \
            comment blocks unblocks deps ref set search assign unassign status sync; do
   out="$("$BIN" "$sub" --help 2>&1)"; rc=$?
   check "$sub --help constructs" 0 "$rc"
@@ -34,6 +34,23 @@ done
 contains "init writes AGENTS.md onboarding" "ditz ready" "$(cat AGENTS.md 2>/dev/null)"
 # `ditz onboard` is re-runnable and idempotent (AGENTS.md already has the block)
 contains "onboard idempotent" "already-present" "$("$BIN" onboard --json 2>&1)"
+
+# Explicit refresh preserves the current generated block, rejects custom text,
+# and leaves default onboard's skip behavior unchanged.
+out="$("$BIN" onboard --refresh --json 2>&1)"; rc=$?
+check "onboard refresh current exit" 0 "$rc"
+contains "onboard refresh current result" '"onboarding":"already-present"' "$out"
+cp AGENTS.md onboarding-original.md
+printf '\n<!-- ditz:onboard -->\ncustom\n<!-- /ditz:onboard -->\n' >> AGENTS.md
+cp AGENTS.md onboarding-custom.md
+out="$("$BIN" onboard --refresh --json 2>&1)"; rc=$?
+check "onboard refresh duplicate exit" 1 "$rc"
+contains "onboard refresh duplicate result" '"onboarding":"failed"' "$out"
+cmp -s AGENTS.md onboarding-custom.md; check "onboard refuses without mutation" 0 "$?"
+out="$("$BIN" onboard --json 2>&1)"; rc=$?
+check "onboard default still skips duplicate" 0 "$rc"
+contains "onboard default duplicate result" "already-present" "$out"
+mv onboarding-original.md AGENTS.md
 
 # 7.3 one-shot creation
 id="$("$BIN" add "Login fails" -t bugfix -c auth --desc "repro steps" --ids-only)"; rc=$?

@@ -43,14 +43,15 @@ ditz sync                     # push/pull issue state with origin
 | `context` | Dump all open issues, optimized for LLM context |
 | `import` | Import issues from a beads (`bd export`) JSONL file |
 | `sync` | Sync the ditz-metadata branch with remote |
-| `onboard` | Write agent-onboarding instructions into `AGENTS.md` |
+| `onboard` | Install agent instructions, or refresh an unchanged generated block with `--refresh` |
 
 Every command supports `--json` for structured output. Run `ditz COMMAND
 --help` for full usage, or `ditz --help` for the complete list.
 
 See [Agent recipes](docs/agent-recipes.md) for noninteractive shell workflows and
 [JSON results and retries](docs/json-contracts.md) for response shapes, partial
-success, and local-versus-remote outcomes.
+success, and local-versus-remote outcomes. See [Updating agent instructions](docs/onboarding.md)
+for safe refresh and symlink handling.
 
 ## Where issues live
 

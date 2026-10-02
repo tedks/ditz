@@ -39,7 +39,9 @@ as proposals until implemented.
 Structured output exists across the command surface, but mutation response
 shapes differ. Accepting `--json` is not a promise that every write returns the
 complete resulting issue. The usage study proposes a separate opt-in contract;
-that proposal is not implemented.
+that proposal is not implemented. The current command-by-command behavior is
+documented in [JSON results and retries](docs/json-contracts.md)
+([PR #37](https://github.com/tedks/ditz/pull/37)).
 
 ## Safety and feedback work completed on 2026-10-02
 
@@ -195,9 +197,11 @@ sync configuration API to assume.
 ### Onboarding
 
 `init` and `onboard` append a marked block without replacing unrelated policy.
-An existing block is skipped. PR #20 permits following an in-repository symlink
-to its target while refusing an external target; the old blanket symlink refusal
-is obsolete. Refreshing an existing stale block remains an open design item.
+An existing block is skipped by default. Explicit `onboard --refresh` replaces
+only a recognized, unchanged generated block and refuses edited or malformed
+blocks. PR #20 permits following an in-repository symlink to its target while
+refusing an external target; the old blanket symlink refusal is obsolete. See
+[onboarding refresh](docs/onboarding.md) for exact recognition and output rules.
 
 ### Import limits
 

@@ -317,10 +317,13 @@ let agents_md_path () =
 let onboard_cmd =
   let doc = "Write the ditz agent-onboarding block into AGENTS.md (re-runnable)" in
   let info = Cmd.info "onboard" ~doc in
-  let run json quiet () =
+  let refresh = Arg.(value & flag & info ["refresh"]
+      ~doc:"Replace an unchanged, recognized generated block; refuse edited or malformed blocks") in
+  let run refresh json quiet () =
     let mode = output_mode json quiet in
     let path = agents_md_path () in
-    let outcome = Ditz.Onboarding.install ~within:(Ditz.Git.find_git_root ()) ~path in
+    let install = if refresh then Ditz.Onboarding.refresh else Ditz.Onboarding.install in
+    let outcome = install ~within:(Ditz.Git.find_git_root ()) ~path in
     (* dest is the file actually touched (may be a symlink's resolved target). *)
     let ob, dest = match outcome with
       | Ditz.Onboarding.Wrote d -> "wrote", Some d
@@ -342,7 +345,7 @@ let onboard_cmd =
         | Failed e -> Fmt.epr "Error: %s@." e));
     (match outcome with Failed _ -> 1 | _ -> 0)
   in
-  Cmd.v info Term.(const run $ json_flag $ quiet_flag $ setup_log_term)
+  Cmd.v info Term.(const run $ refresh $ json_flag $ quiet_flag $ setup_log_term)
 
 let init_cmd =
   let doc = "Initialize a new ditz project" in

@@ -21,7 +21,7 @@ let read_file path =
     durability is delegated to the git object store — the guarantee here is
     against torn writes from process death); symlinks in PARENT directories
     are followed — the defense is scoped to the destination entry itself. *)
-let write_file_atomic ~path ~content =
+let write_file_atomic_impl ~mode ~path ~content =
   let dir = Filename.dirname path in
   let base = Filename.basename path in
   match Filename.open_temp_file ~temp_dir:dir (base ^ ".tmp-") "" with
@@ -30,6 +30,10 @@ let write_file_atomic ~path ~content =
   | temp_path, oc ->
     (try
        output_string oc content;
+       flush oc;
+       (match mode with
+        | None -> ()
+        | Some perm -> Unix.fchmod (Unix.descr_of_out_channel oc) perm);
        close_out oc;
        Unix.rename temp_path path;
        Ok ()
@@ -37,6 +41,15 @@ let write_file_atomic ~path ~content =
        close_out_noerr oc;
        (try Sys.remove temp_path with _ -> ());
        Error (`Msg (Printf.sprintf "Failed to write %s: %s" path (Printexc.to_string exn))))
+
+(* Keep the existing writer's creation-mode contract and API unchanged. The
+   explicit variant sets permissions on the temporary inode before publishing
+   it; a chmod failure leaves the destination untouched. *)
+let write_file_atomic ~path ~content =
+  write_file_atomic_impl ~mode:None ~path ~content
+
+let write_file_atomic_with_mode ~mode ~path ~content =
+  write_file_atomic_impl ~mode:(Some mode) ~path ~content
 
 (** Is there a directory entry at [path]? [lstat], not [stat]: a dangling
     symlink is still an entry that a rename onto [path] would replace. On a
