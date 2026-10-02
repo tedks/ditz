@@ -3,7 +3,8 @@
 These examples use the existing CLI from a shell in the intended, initialized
 project. Check your working directory and `~/.ditz-config` before writing: a
 configured issue directory can select a different store. See [FORMAT.md](../FORMAT.md)
-for storage and ID rules. The IDs and text below are synthetic.
+for storage and ID rules and [JSON results and retries](json-contracts.md) for
+command-specific outcomes. The IDs and text below are synthetic.
 
 If your project requires Nix, run the script inside `nix develop --command sh
 path/to/script.sh`. Capture each `ditz` command's output inside that script;
