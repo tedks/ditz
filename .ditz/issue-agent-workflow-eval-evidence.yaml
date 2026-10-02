@@ -1,0 +1,24 @@
+id: agent-workflow-eval-evidence
+title: Strengthen observable ownership and literal-input skill evaluations
+desc: Followup from dotfiles PR169 issue-tracking skill smoke evaluation. Both with/without
+  conditions established10/12 assertions; remaining clauses were not observable, not
+  demonstrated behavior failures. Add an ownership-conflict scenario with an inspectable
+  coordinator/lane-record action. For literal input capture command/stdin provenance
+  or grade exact stored bytes rather than unobservable quoting syntax. Current probes
+  verified exact stored literal bytes/status/history, mixed close and lost-comment
+  recovery, rejected remote sync. Three single paired scenarios do not demonstrate
+  efficacy gain; skill used3 extra help calls per executed case. Keep local disposable
+  tracker exercises, no CI workflows and no automatic broad benchmark rollout.
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T06:38:49-00:00
+references: []
+log_events:
+- time: 2026-10-02T06:38:49-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
