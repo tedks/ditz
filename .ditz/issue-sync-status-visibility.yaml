@@ -11,8 +11,8 @@ type: feature
 component: sync
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-14T23:48:30-00:00
 references: []
 log_events:
@@ -64,6 +64,13 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T06:04:35-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'PR #31 merged 42db9df at 9f9833b. Explicit fetch refspec, truthful push/pull
+    reports and local sync status; stale remote ref cleared safely after confirmed
+    deletion. Native+Google convergence CLEAN, remote-deletion mutation check failed
+    old code, exact rebased Nix gates PASS.'
 blocks:
 - write-lock-recheck
 blocked_by:
