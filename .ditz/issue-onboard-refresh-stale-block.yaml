@@ -13,8 +13,8 @@ type: feature
 component: onboarding
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-13T05:24:08-00:00
 references: []
 log_events:
@@ -34,3 +34,12 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T06:38:48-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'Merged PR #36 at953457425c338310d87b648b9e667973b89c906c. Explicit --refresh
+    updates only byte-exact known complete generated blocks, preserves surrounding
+    bytes, symlink boundary and permission bits; customized/malformed blocks refuse.
+    Exact-head Nix build/full forced tests pass; native+Google council CLEAN convergence;
+    Claude credits unavailable. No installed binary upgrade or live onboarding refresh
+    performed.'
