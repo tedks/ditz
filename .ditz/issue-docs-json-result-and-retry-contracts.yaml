@@ -1,0 +1,26 @@
+id: docs-json-result-and-retry-contracts
+title: Document current command JSON shapes and retry effects
+desc: 'README says every command supports JSON but does not specify differing response/error
+  shapes or lifecycle retry log effects. Publish a compact current-contract table:
+  add/set return id/title/status; comment id/commented; lifecycle arrays/errors differ;
+  close partial failure is nonzero with successful IDs retained; parse errors124 may
+  produce no JSON; repeated close succeeds and appends an event. Distinguish local
+  commit from remote sync and full issue state from summary. Evidence: source83dd20e
+  and private synthetic probes; G2/G3 verification and help cost. This contract had
+  to be recovered from bin/main.ml/types.ml and probes, so it is a docs bug, not permission
+  to change behavior. Coordinate docs-agent-composition-recipes and optional result
+  decision Q1. Acceptance: table matches source/examples, no promise of lossless/current
+  schemas across unknown installed revisions. Evidence report: https://github.com/tedks/ditz/pull/34.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:57:07-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:57:07-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
