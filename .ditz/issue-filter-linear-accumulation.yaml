@@ -1,0 +1,19 @@
+id: filter-linear-accumulation
+title: Keep filter accumulation linear for long repeated filter lists
+desc: 'PR #29 Google council nit: parse_filter uses acc @ values in a fold, quadratic
+  in filter elements. Deferred as statuses/types form tiny finite vocabularies and
+  ordinary CLI lists are short; membership filtering is correct. Future cleanup can
+  prepend/reverse or deduplicate without changing accepted values.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:49:56-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:49:56-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
