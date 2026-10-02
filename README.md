@@ -48,6 +48,8 @@ ditz sync                     # push/pull issue state with origin
 Every command supports `--json` for structured output. Run `ditz COMMAND
 --help` for full usage, or `ditz --help` for the complete list.
 
+See [Agent recipes](docs/agent-recipes.md) for noninteractive shell workflows.
+
 ## Where issues live
 
 Issue data lives on a dedicated orphan branch, `ditz-metadata`, so issue
