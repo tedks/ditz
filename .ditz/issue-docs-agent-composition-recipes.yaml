@@ -1,0 +1,29 @@
+id: docs-agent-composition-recipes
+title: Teach agent recipes for ID capture, literal stdin and partial multi-ID results
+desc: 'Add concise recipes where callers read help/onboarding: named add --id and
+  --ids-only (capture returned ID instead of list/grep), quoted heredoc or owned file
+  for --desc-stdin/comment --stdin, --help=plain, checked per-item results for multi-ID
+  close, status is not an exclusive claim. Document that stdin is trimmed, named re-add
+  is no-op not upsert and can return before reading stdin, repeated close/start may
+  append another log event, and comments are not blindly retry-safe. Explain shell/Nix
+  chatter belongs outside JSON stdout; do not add a banner stripper. Evidence G1-G5:
+  one ID list/awk recovery, one bash quoting repair, one JS wrapper repair, two banner/head
+  visibility episodes, seven successful multi-create interactions. Coordinate with
+  #27 and existing onboard-refresh-stale-block rather than duplicating naming work.
+  Acceptance: all CURRENT examples execute only against synthetic trackers, literal
+  special characters preserved subject to documented trim, IDs captured directly,
+  partial close retries only failed items. No new batch API or SDK. Implementation/documentation
+  follow-up requires assignment. Evidence report: https://github.com/tedks/ditz/pull/34.'
+type: task
+component: cli
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:57:07-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:57:07-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
