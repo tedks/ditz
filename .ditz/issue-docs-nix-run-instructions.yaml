@@ -18,3 +18,11 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-10-02T05:57:09-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'Recent G2 evidence is specifically development-shell startup chatter consuming
+    head budgets, not ditz emitting invalid JSON. Recommend separate environment output
+    from command stdout in caller recipes/project shell maintenance; do not implement
+    ditz banner stripping. Existing issue''s cold nix-run cost is inherited, not newly
+    measured here. Evidence report: https://github.com/tedks/ditz/pull/34.'
