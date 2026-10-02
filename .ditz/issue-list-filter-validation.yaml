@@ -11,8 +11,8 @@ type: bugfix
 component: cli
 release:
 reporter: Ted Smith <tedks@riseup.net>
-status: in_progress
-disposition:
+status: closed
+disposition: fixed
 creation_time: 2026-09-14T23:48:29-00:00
 references: []
 log_events:
@@ -57,6 +57,12 @@ log_events:
   who: Ted Smith
   what: started
   comment: ""
+- time: 2026-10-02T05:57:43-00:00
+  who: Ted Smith
+  what: 'closed: fixed'
+  comment: 'PR #29 merged 89e4554. Exact e590b65 Nix build/full runtest PASS, native+Google
+    full council CLEAN. Old binary fails new filter/refusal tests. Performance nit
+    filed separately.'
 blocks:
 - commit-own-path-only
 blocked_by:
