@@ -82,6 +82,9 @@ Statuses are `unstarted`, `in_progress`, `paused`, `closed`; types are `bugfix`,
 `feature`, `task`; dispositions are `fixed`, `wontfix`, `reorg`. `assign` means a
 release assignment, not a person or agent assignment.
 
+In `status`, the `bugs`, `features`, and `tasks` counts include only open issues;
+they sum to `open`, not `total`.
+
 `list` includes closed issues by default; `--status open` excludes them. `context`
 without a focus returns open issues, but `context --issue ID` includes the focus
 and its direct relations even if closed. `ready` is a snapshot of unstarted or
@@ -138,9 +141,10 @@ exactly-once protocol under concurrent changes.
 
 ## Local writes and remote sync
 
-On the Git backend, a successful issue mutation has made a local metadata
-commit. It has not published that commit to `origin`; run `ditz sync` as a
-separate step. Filesystem-backed writes update files without a metadata commit.
+On the Git backend, a successful issue mutation commits changed state locally;
+a successful no-op need not create a new commit. It has not published local
+commits to `origin`; run `ditz sync` as a separate step. Filesystem-backed writes
+update files without a metadata commit.
 Verify the intended repository and `~/.ditz-config` before writing: the Git
 backend takes precedence when a metadata branch exists; otherwise a configured
 issue directory can select a different filesystem store.
