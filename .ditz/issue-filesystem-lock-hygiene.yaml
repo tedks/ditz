@@ -1,0 +1,21 @@
+id: filesystem-lock-hygiene
+title: Keep filesystem writer locks out of ordinary git status
+desc: 'PR #32 existing council nit deferred: filesystem backend stores .ditz-write.lock
+  beside issue files, so a version-controlled filesystem tracker sees an untracked
+  lock file. Lock identity must remain stable and shared by every process, including
+  alias paths; blindly deleting/moving locks risks concurrent writers. Choose documented
+  ignore guidance or a safe ignored location in a separate change with race tests.
+  No lost-update defect in the current stable lock placement.'
+type: task
+component: storage
+release:
+reporter: Ted Smith <tedks@riseup.net>
+status: unstarted
+disposition:
+creation_time: 2026-10-02T05:57:43-00:00
+references: []
+log_events:
+- time: 2026-10-02T05:57:43-00:00
+  who: Ted Smith
+  what: created
+  comment: ""
