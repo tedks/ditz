@@ -19,3 +19,11 @@ log_events:
   who: Ted Smith
   what: created
   comment: ""
+- time: 2026-10-02T05:57:08-00:00
+  who: Ted Smith
+  what: commented
+  comment: 'New post-Sep15 corroboration G3: one OpenAI caller used ditz help and
+    received unknown-command error; later command --help used. Existing issue already
+    covers alias; no duplicate. Recommend help [COMMAND] plus --description alias,
+    with plain, short examples and parser contract compatibility. Does not require
+    new naming or batch machinery. Evidence report: https://github.com/tedks/ditz/pull/34.'
