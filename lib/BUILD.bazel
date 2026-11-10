@@ -4,5 +4,5 @@ ocaml_library(
     name = "fs_util",
     src = "fs_util.ml",
     stdlib_libraries = ["unix"],
-    visibility = ["//test:__pkg__"],
+    visibility = ["//bazel_test:__pkg__"],
 )

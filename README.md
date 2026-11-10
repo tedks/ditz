@@ -2,7 +2,7 @@
 
 ## Bazel OCaml filesystem tracer
 
-`bazel test //test:fs_util_bazel_test` compiles the existing `lib/fs_util.ml`
+`bazel test //bazel_test:fs_util_bazel_test` compiles the existing `lib/fs_util.ml`
 against OCaml's Unix library and checks sequential write/read, symlink
 replacement, entry detection, and missing-parent failure. The Bazel module
 pins OCaml 5.5.2 source plus its GCC/configure-make toolchain. This bounded
