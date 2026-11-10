@@ -1,0 +1,7 @@
+load("//bazel:ocaml_rules.bzl", "ocaml_test")
+
+ocaml_test(
+    name = "fs_util_bazel_test",
+    src = "fs_util_bazel_test.ml",
+    deps = ["//lib:fs_util"],
+)
