@@ -1,5 +1,14 @@
 # ditz
 
+## Bazel OCaml filesystem tracer
+
+`bazel test //bazel_test:fs_util_bazel_test` compiles the existing `lib/fs_util.ml`
+against OCaml's Unix library and checks sequential write/read, symlink
+replacement, entry detection, and missing-parent failure. The Bazel module
+pins OCaml 5.5.2 source plus its GCC/configure-make toolchain. This bounded
+target does not yet include the Ditz CLI or YAML, Digestif, and PPX package
+closure. The existing Dune/Nix commands remain available.
+
 A simple, light-weight distributed issue tracker designed to work with git.
 
 Issues are plain-text YAML files, one per issue, meant to be `cat`'d, `grep`'d,
