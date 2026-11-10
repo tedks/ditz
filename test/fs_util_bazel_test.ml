@@ -14,10 +14,11 @@ let () =
   let path = Filename.concat dir "issue.yaml" in
   let victim = Filename.concat dir "victim.txt" in
   let link = Filename.concat dir "link.yaml" in
+  let dangling = Filename.concat dir "dangling.yaml" in
   Fun.protect
     ~finally:(fun () ->
-      List.iter (fun file -> if Sys.file_exists file then Sys.remove file)
-        [path; victim; link];
+      Array.iter (fun name -> Sys.remove (Filename.concat dir name))
+        (Sys.readdir dir);
       Unix.rmdir dir)
     (fun () ->
       expect_ok (Fs_util.write_file_atomic ~path ~content:"first\n");
@@ -41,6 +42,10 @@ let () =
       (match Fs_util.entry_exists (Filename.concat dir "missing") with
        | Ok false -> ()
        | _ -> failwith "missing path reported present");
+      Unix.symlink "missing-target" dangling;
+      (match Fs_util.entry_exists dangling with
+       | Ok true -> ()
+       | _ -> failwith "dangling symlink entry not found");
       (match Fs_util.write_file_atomic
                ~path:(Filename.concat dir "missing/issue.yaml") ~content:"x" with
        | Error (`Msg _) -> ()
